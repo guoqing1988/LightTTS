@@ -86,8 +86,8 @@ pip install ttsfrd-0.4.2-cp310-cp310-linux_x86_64.whl
 
 ```bash
 # It is recommended to enable the load_trt parameter for acceleration.
-# The default is fp16 mode.
-python -m light_tts.server.api_server --model_dir ./pretrained_models/CosyVoice2-0.5B-latest --load_trt True --max_total_token_num 65536 --max_req_total_len 32768
+# token2wav: The default is fp16 mode for CosyVoice2 and fp32 mode for CosyVoice3.
+python -m light_tts.server.api_server --model_dir ./pretrained_models/CosyVoice2-0.5B-latest
 ```
 
 - max_total_token_num: llm arg, the total token nums the gpu and model can support, equals = `max_batch * (input_len + output_len)`

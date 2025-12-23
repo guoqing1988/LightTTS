@@ -21,6 +21,7 @@ class CosyVoice2PreAndPostLayerWeight(Qwen2PreAndPostLayerWeight):
                 self.lm_head_weight_ = self.wte_weight_
         if "lm_head.weight" in weights:
             self.lm_head_weight_ = self._cuda(weights["lm_head.weight"][split_start:split_end, :])
+        self.llm_embedding_weight_ = None
         if "llm_embedding.weight" in weights:
             self.llm_embedding_weight_ = self._cuda(weights["llm_embedding.weight"])
         if "speech_embedding.weight" in weights:
@@ -43,8 +44,7 @@ class CosyVoice2PreAndPostLayerWeight(Qwen2PreAndPostLayerWeight):
             del self.wte_weight_
             del self.llm_embedding_weight_
             del self.speech_embedding_weight_
-
-        if self.wte_weight_ is not None and self.speech_embedding_weight_ is not None:
+        elif self.wte_weight_ is not None and self.speech_embedding_weight_ is not None:
             self.text_llm_audio_emb = torch.cat([self.wte_weight_, self.speech_embedding_weight_], dim=0)
             del self.wte_weight_
             del self.speech_embedding_weight_

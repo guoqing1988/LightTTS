@@ -31,17 +31,18 @@ import sys
 
 # 抑制常见的库警告
 import warnings
-warnings.filterwarnings('ignore', category=FutureWarning, module='diffusers')
-warnings.filterwarnings('ignore', category=UserWarning, message='.*weight_norm.*')
-warnings.filterwarnings('ignore', category=UserWarning, module='onnxruntime')
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'cosyvoice'))
-from light_tts.utils.load_utils import load_yaml
+warnings.filterwarnings("ignore", category=FutureWarning, module="diffusers")
+warnings.filterwarnings("ignore", category=UserWarning, message=".*weight_norm.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="onnxruntime")
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "cosyvoice"))
+from light_tts.utils.load_utils import CosyVoiceVersion, load_yaml
+
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 import argparse
 import json
 from http import HTTPStatus
-import multiprocessing as mp
 import numpy as np
 from fastapi import FastAPI, UploadFile, Form, File, BackgroundTasks, Request, WebSocketDisconnect, WebSocket
 from fastapi.responses import Response, StreamingResponse, JSONResponse
@@ -68,10 +69,11 @@ from .metrics import histogram_timer
 from cosyvoice.cli.frontend import CosyVoiceFrontEnd
 from light_tts.utils.process_check import is_process_active
 from prometheus_client import Counter, Histogram, generate_latest
+
 all_request_counter = Counter("lightllm_request_count", "The total number of requests")
 failure_request_counter = Counter("lightllm_request_failure", "The total number of requests")
 sucess_request_counter = Counter("lightllm_request_success", "The total number of requests")
-request_latency_histogram = Histogram("lightllm_request_latency", "Request latency", ['route'])
+request_latency_histogram = Histogram("lightllm_request_latency", "Request latency", ["route"])
 from dataclasses import dataclass
 from .health_monitor import start_health_check_process
 from light_tts.utils.log_utils import init_logger
@@ -81,6 +83,7 @@ from light_tts.server import TokenLoad
 logger = init_logger(__name__)
 g_id_gen = ReqIDGenerator()
 lora_styles = ["CosyVoice2"]
+
 
 @dataclass
 class G_Objs:
@@ -92,27 +95,33 @@ class G_Objs:
     def set_args(self, args):
         self.args = args
         self.httpserver_manager = HttpServerManager(
-            args,
-            httpserver_port=args.httpserver_port,
-            tts1_encode_ports=args.tts1_encode_ports
+            args, httpserver_port=args.httpserver_port, tts1_encode_ports=args.tts1_encode_ports
         )
         self.shared_token_load = TokenLoad(f"{get_unique_server_name()}_shared_token_load", 1)
         configs = load_yaml(args.model_dir)
-        self.frontend = CosyVoiceFrontEnd(configs['get_tokenizer'],
-                                          configs['feat_extractor'],
-                                          '{}/campplus.onnx'.format(args.model_dir),
-                                          '{}/speech_tokenizer_v2.onnx'.format(args.model_dir),
-                                          '{}/spk2info.pt'.format(args.model_dir),
-                                          configs['allowed_special'])
+        if configs["cosyvoice_version"] == CosyVoiceVersion.VERSION_2:
+            speech_tokenizer_model = "{}/speech_tokenizer_v2.onnx".format(args.model_dir)
+        else:
+            speech_tokenizer_model = "{}/speech_tokenizer_v3.onnx".format(args.model_dir)
+        self.frontend = CosyVoiceFrontEnd(
+            configs["get_tokenizer"],
+            configs["feat_extractor"],
+            "{}/campplus.onnx".format(args.model_dir),
+            speech_tokenizer_model,
+            "{}/spk2info.pt".format(args.model_dir),
+            configs["allowed_special"],
+        )
         del self.frontend.feat_extractor
         del self.frontend.campplus_session
         del self.frontend.speech_tokenizer_session
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+
 g_objs = G_Objs()
 app = FastAPI()
 g_objs.app = app
+
 
 def create_error_response(status_code: HTTPStatus, message: str) -> JSONResponse:
     return JSONResponse({"message": message}, status_code=status_code.value)
@@ -129,25 +138,30 @@ async def healthcheck():
         return JSONResponse({"message": "Ok"}, status_code=200)
     else:
         return JSONResponse({"message": "Error"}, status_code=404)
-    
+
+
 @app.get("/liveness")
 def liveness():
     return {"status": "ok"}
+
 
 @app.get("/readiness")
 def readiness():
     return {"status": "ok"}
 
+
 def generate_data(model_output):
     for i in model_output:
-        tts_audio = (i['tts_speech'] * (2 ** 15)).astype(np.int16).tobytes()
+        tts_audio = (i["tts_speech"] * (2 ** 15)).astype(np.int16).tobytes()
         yield tts_audio
+
 
 async def generate_data_stream(generate_objs):
     for generator in generate_objs:
         async for i in generator:
-            tts_audio = (i['tts_speech'] * (2 ** 15)).astype(np.int16).tobytes()
+            tts_audio = (i["tts_speech"] * (2 ** 15)).astype(np.int16).tobytes()
             yield tts_audio
+
 
 def calculate_md5(file: UploadFile) -> str:
     hash_md5 = hashlib.md5()
@@ -155,14 +169,16 @@ def calculate_md5(file: UploadFile) -> str:
         hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
+
 async def send_wav(websocket: WebSocket, generator):
     async for result in generator:
         if isinstance(result, dict):
-            await websocket.send_bytes((result['tts_speech'] * (2 ** 15)).astype(np.int16).tobytes())
+            await websocket.send_bytes((result["tts_speech"] * (2 ** 15)).astype(np.int16).tobytes())
             continue
 
         websocket.close()
         return
+
 
 @app.websocket("/inference_zero_shot_bistream")
 async def inference_zero_shot_bistream(websocket: WebSocket):
@@ -181,14 +197,14 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
     prompt_wav_data = await websocket.receive_bytes()
     wav_bytes_io = BytesIO(prompt_wav_data)
     prompt_speech_16k = load_wav(wav_bytes_io, 16000)
-    semantic_len = (prompt_speech_16k.shape[1] + 239) // 640 + 10 # + 10 for safe
+    semantic_len = (prompt_speech_16k.shape[1] + 239) // 640 + 10  # + 10 for safe
 
     wav_bytes_io.seek(0)
     speech_md5 = calculate_md5(wav_bytes_io)
-    
+
     if tts_model_name == "default":
         tts_model_name = lora_styles[0]
-    
+
     speech_index, have_alloc = g_objs.httpserver_manager.alloc_speech_mem(speech_md5, prompt_speech_16k)
     request_id = g_id_gen.generate_id()
     first_text = True
@@ -212,7 +228,7 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
                 "speech_index": speech_index,
                 "semantic_len": semantic_len,
                 "bistream": True,
-                "append": not first_text
+                "append": not first_text,
             }
             if input_data.get("finish", False):
                 cur_req_dict["finish"] = True
@@ -220,9 +236,7 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
                 await g_objs.httpserver_manager.append_bistream(cur_req_dict, request_id)
                 break
             elif first_text:
-                generator = g_objs.httpserver_manager.generate(
-                    cur_req_dict, request_id, sampling_params
-                )
+                generator = g_objs.httpserver_manager.generate(cur_req_dict, request_id, sampling_params)
                 process_task = asyncio.create_task(send_wav(websocket, generator))
                 first_text = False
             else:
@@ -233,9 +247,7 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
         await g_objs.httpserver_manager.abort(request_id)
     except Exception as e:
         traceback.print_exc()
-        await websocket.send_json({
-            "error": f"Server error: {str(e)}"
-        })
+        await websocket.send_json({"error": f"Server error: {str(e)}"})
     finally:
         await websocket.close()
         if process_task is not None:
@@ -245,14 +257,14 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
 @histogram_timer(request_latency_histogram)
 @app.post("/inference_zero_shot")
 async def inference_zero_shot(
-        request: Request,
-        tts_text: str = Form(),
-        prompt_text: str = Form(),
-        prompt_wav: UploadFile = File(),
-        stream: bool = Form(default=False),
-        tts_model_name: str = Form(default="default"),
-        speed: float = Form(default=1.0),
-    ):
+    request: Request,
+    tts_text: str = Form(),
+    prompt_text: str = Form(),
+    prompt_wav: UploadFile = File(),
+    stream: bool = Form(default=False),
+    tts_model_name: str = Form(default="default"),
+    speed: float = Form(default=1.0),
+):
     all_request_counter.inc()
     global lora_styles
 
@@ -261,7 +273,7 @@ async def inference_zero_shot(
 
     if tts_model_name == "default":
         tts_model_name = lora_styles[0]
-    
+
     # 检查请求参数
     sample_params_dict = {}
     sampling_params = SamplingParams()
@@ -270,13 +282,13 @@ async def inference_zero_shot(
     prompt_text = g_objs.frontend.text_normalize(prompt_text, split=False)
     tts_texts = g_objs.frontend.text_normalize(tts_text, split=True)
     prompt_speech_16k = load_wav(prompt_wav.file, 16000)
-    semantic_len = (prompt_speech_16k.shape[1] + 239) // 640 + 10 # + 10 for safe
-    
+    semantic_len = (prompt_speech_16k.shape[1] + 239) // 640 + 10  # + 10 for safe
+
     prompt_wav.file.seek(0)
     speech_md5 = calculate_md5(prompt_wav.file)
 
     generate_objs = []
-    need_extract_speech=True
+    need_extract_speech = True
     speech_index, have_alloc = g_objs.httpserver_manager.alloc_speech_mem(speech_md5, prompt_speech_16k)
 
     request_ids = []
@@ -313,10 +325,11 @@ async def inference_zero_shot(
             for generator in generate_objs:
                 async for result in generator:
                     ans_objs.append(result)
-            return StreamingResponse(generate_data(ans_objs))    
+            return StreamingResponse(generate_data(ans_objs))
         except Exception as e:
             logger.error("An error occurred: %s", str(e), exc_info=True)
             return create_error_response(HTTPStatus.EXPECTATION_FAILED, str(e))
+
 
 @app.post("/query_tts_model")
 @app.get("/query_tts_model")
@@ -325,12 +338,14 @@ async def show_available_styles(request: Request) -> Response:
     json_data = json.dumps(data)
     return Response(content=json_data, media_type="application/json")
 
+
 @app.get("/metrics")
 async def metrics() -> Response:
     metrics_data = generate_latest()
     response = Response(metrics_data)
-    response.mimetype = 'text/plain'
+    response.mimetype = "text/plain"
     return response
+
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -340,12 +355,14 @@ async def shutdown():
     # 杀掉所有子进程
     import psutil
     import signal
+
     parent = psutil.Process(os.getpid())
     children = parent.children(recursive=True)
     for child in children:
         os.kill(child.pid, signal.SIGKILL)
     logger.info("Graceful shutdown completed.")
     return
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -354,7 +371,7 @@ async def startup_event():
     loop = asyncio.get_event_loop()
     g_objs.set_args(get_env_start_args())
     loop.create_task(g_objs.httpserver_manager.handle_loop())
-    logger.info(f"✅ Application ready! Server is now accepting requests")
+    logger.info("✅ Application ready! Server is now accepting requests")
     logger.info(f"🌐 Listening at: http://{g_objs.args.host}:{g_objs.args.port}")
     logger.info("=" * 60)
     return

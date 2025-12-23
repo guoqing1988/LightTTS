@@ -60,11 +60,17 @@ class TTS1EncodeManager:
         self.configs = configs
         self.resample_rate = configs["sample_rate"]
         self.token_hop_len = 25
+
+        if configs["cosyvoice_version"] == CosyVoiceVersion.VERSION_2:
+            speech_tokenizer_model = "{}/speech_tokenizer_v2.onnx".format(args.model_dir)
+        else:
+            speech_tokenizer_model = "{}/speech_tokenizer_v3.onnx".format(args.model_dir)
+
         self.frontend = CosyVoiceFrontEnd(
             configs["get_tokenizer"],
             configs["feat_extractor"],
             "{}/campplus.onnx".format(args.model_dir),
-            "{}/speech_tokenizer_v2.onnx".format(args.model_dir),
+            speech_tokenizer_model,
             "{}/spk2info.pt".format(args.model_dir),
             configs["allowed_special"],
         )
