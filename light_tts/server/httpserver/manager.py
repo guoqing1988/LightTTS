@@ -53,7 +53,7 @@ class HttpServerManager:
         configs = load_yaml(args.model_dir)
         self.model_config = configs["llm"].llm.model.model.config
         self.vocab_size = self.model_config.vocab_size
-        self.sos_eos = self.vocab_size
+        self.sos = self.vocab_size
         self.task_id = self.vocab_size + 1
 
         self.max_req_total_len = args.max_req_total_len
@@ -176,7 +176,7 @@ class HttpServerManager:
             prompt_text_ids = await self._async_encode(request_dict["prompt_text"])
             text_ids = await self._async_encode(request_dict["text"])
             if not bistream:
-                prompt_ids = list(chain([self.sos_eos], prompt_text_ids, text_ids, [self.task_id]))
+                prompt_ids = list(chain([self.sos], prompt_text_ids, text_ids, [self.task_id]))
                 sampling_params.min_new_tokens = len(text_ids) * self.min_token_text_ratio
                 sampling_params.max_new_tokens = len(text_ids) * self.max_token_text_ratio
                 await self._check_and_repair_length(prompt_ids, semantic_len, sampling_params)
@@ -193,7 +193,7 @@ class HttpServerManager:
             style = request_dict["tts_model_name"]
             req_obj = await self.shm_req_manager.async_get_req_obj_by_index(req_index)
             req_objs = []
-            req_obj.init(request_id, prompt_ids, request_dict, sampling_params, self.sos_eos, self.task_id, speed)
+            req_obj.init(request_id, prompt_ids, request_dict, sampling_params, self.sos, self.task_id, speed)
             req_objs.append(req_obj)
             req_status = ReqStatus(request_id, req_objs, start_time)
             self.req_id_to_out_inf[request_id] = req_status
@@ -238,9 +238,9 @@ class HttpServerManager:
 
             # 清理已经处理完的可以删除的请求
             release_req_status: List[ReqStatus] = []
-            for req_status in self.req_id_to_out_inf.values():
-                if req_status.can_release():
-
+            for group_req_id_ in list(self.req_id_to_out_inf.keys()):
+                req_status: ReqStatus = self.req_id_to_out_inf.get(group_req_id_, None)
+                if req_status is not None and req_status.can_release():
                     release_req_status.append(req_status)
             
             for req_status in release_req_status:
@@ -269,20 +269,26 @@ class HttpServerManager:
             except asyncio.TimeoutError:
                 pass
 
-            for req_status in self.req_id_to_out_inf.values():
+            for group_req_id_ in list(self.req_id_to_out_inf.keys()):
+                req_status = self.req_id_to_out_inf.get(group_req_id_, None)
+                if req_status is None:
+                    continue
+                
                 for req in req_status.group_req_objs.shm_req_objs:
                     if req.stream:
                         if not req.out_tokens_queue.is_empty():
                             tts_speech, token_offset, finalize = req.out_tokens_queue.peek()
-                            req.out_tokens_queue.pop_no_ret()
+                            tts_speech = tts_speech.copy()
                         
                             if finalize:
                                 finish_status = FinishStatus(req.finish_status.status)
                             else:
                                 finish_status = FinishStatus()
+
+                            req.out_tokens_queue.pop_no_ret()
                             async with req_status.lock:
                                 logger.debug(f"req_id {req.request_id} shm_index {req.index_in_shm_mem} get chunk")
-                                req_status.out_data_info_list.append((tts_speech.copy(), finish_status, finalize))
+                                req_status.out_data_info_list.append((tts_speech, finish_status, finalize))
                                 req_status.event.set()
                     elif req.gen_finished:
                         tts_speech = req.get_gen_audios()

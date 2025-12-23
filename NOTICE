@@ -9,7 +9,7 @@ CosyVoice (cosyvoice/)
 https://github.com/FunAudioLLM/CosyVoice
 Copyright (c) Alibaba, Inc. and its affiliates.
 Licensed under the Apache License, Version 2.0
-Original commit: 9f27b42
+Original commit: bc34459
 
    The cosyvoice/ directory contains a modified copy of the CosyVoice project.
    We have integrated and adapted this code for use in Light TTS.
