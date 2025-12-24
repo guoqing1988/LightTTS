@@ -1,20 +1,24 @@
 ######## lora 语音速度测试 ###############
 from datetime import datetime
-import uuid
-import json
 import time
 import requests
 import json
 from concurrent.futures import ProcessPoolExecutor
-import soundfile as sf
 import numpy as np
-import numpy as np
-import random
 from tqdm import tqdm
 import os
+import argparse
+
+# 解析命令行参数
+parser = argparse.ArgumentParser(description="Zero-shot TTS speed test script")
+parser.add_argument("--port", type=int, default=8080, help="Server port number (default: 8080)")
+parser.add_argument(
+    "--cosyvoice_version", type=int, choices=[2, 3], default=3, help="CosyVoice version: 2 or 3 (default: 3)"
+)
+args = parser.parse_args()
 
 # config
-server_url = "http://localhost:8080/inference_zero_shot"
+server_url = f"http://localhost:{args.port}/inference_zero_shot"
 num_workers = [1, 2, 4, 8]
 num_test = 50
 path = "../cosyvoice/asset/zero_shot_prompt.wav"
@@ -26,22 +30,28 @@ with open("test_texts.json", "r") as f:
 failed = 0
 os.makedirs("./outs", exist_ok=True)
 
+
 def get_file(index):
     url = f"{server_url}/"
     inputs = all_inputs[index % len(all_inputs)]
-    files = {
-        "prompt_wav": ("sample.wav", open(path, "rb"), "audio/wav")
-    }
+    files = {"prompt_wav": ("sample.wav", open(path, "rb"), "audio/wav")}
+
+    # 根据 cosyvoice_version 设置 prompt_text
+    if args.cosyvoice_version == 3:
+        prompt_text = "You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。"
+    else:
+        prompt_text = "希望你以后能够做的比我还好呦。"
+
     data = {
         "tts_text": inputs,
-        "prompt_text": "希望你以后能够做的比我还好呦。",
+        "prompt_text": prompt_text,
     }
     global failed
 
     start = time.time()
     response = requests.post(url, files=files, data=data, stream=True)
     cost_time = time.time() - start
-    
+
     try:
         if response.status_code == 200:
             audio_data = bytearray()
@@ -52,10 +62,11 @@ def get_file(index):
             print(f"{index} {inputs} \n error:{response.text}")
             failed += 1
     except Exception as e:
-        print(f'An exception occurred\ntext: {inputs}\n{e}\n{response.text}')
+        print(f"An exception occurred\ntext: {inputs}\n{e}\n{response.text}")
         failed += 1
     finally:
         return cost_time
+
 
 results = []
 for num_worker in num_workers:
@@ -65,16 +76,12 @@ for num_worker in num_workers:
 
     start_time = time.time()
     with ProcessPoolExecutor(max_workers=num_worker) as executor:
-        all_cost_times = list(
-            tqdm(executor.map(get_file, range(num_test)), total=num_test, desc="running tests")
-        )
+        all_cost_times = list(tqdm(executor.map(get_file, range(num_test)), total=num_test, desc="running tests"))
     total_time = time.time() - start_time
 
     # 假设是你的数据数组
     data = np.array(all_cost_times)
-    result = {
-        "num_workers": num_worker
-    }
+    result = {"num_workers": num_worker}
     # 计算分位数
     if failed - last_failed > 0:
         print(f"Failed {failed - last_failed}")
