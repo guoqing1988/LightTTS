@@ -58,7 +58,7 @@ class ContinuesBatchBackend(ModeBackend):
 
         index = 0
         # 2 for <sos> and <task_id>
-        text_vocab = self.model.text_vob_size + 2
+        text_vocab = self.model.embed_offset
         for req_obj in run_reqs:
             req_obj: InferReq = req_obj
             req_obj.cur_kv_len = req_obj.get_cur_total_len()

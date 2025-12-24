@@ -29,19 +29,20 @@ class CosyVoice2TpPartModel(Qwen2TpPartModel):
 
     def _init_config(self):
         super()._init_config()
-        self.text_vob_size = self.config["vocab_size"]
-
+        self.embed_offset = self.config["vocab_size"] + 2
 
     def _init_weights(self):
         self.pre_post_weight = self.pre_and_post_weight_class(
             self.data_type, network_config=self.config, mode=self.mode
         )
         self.trans_layers_weight = [
-            self.transformer_weight_class(i, torch.float16, network_config=self.config, mode=self.mode, quant_cfg=self.quant_cfg)
+            self.transformer_weight_class(
+                i, self.data_type, network_config=self.config, mode=self.mode, quant_cfg=self.quant_cfg
+            )
             for i in range(self.config["n_layer"])
         ]
         self.weight_dict = torch.load(self.pt_dir, map_location="cpu")
-        self.weight_dict = {k.replace("llm.model.", ''): self.weight_dict[k] for k in self.weight_dict.keys()}
+        self.weight_dict = {k.replace("llm.model.", ""): self.weight_dict[k] for k in self.weight_dict.keys()}
         load_hf_weights(
             self.data_type,
             weight_dir=self.weight_dir_,
@@ -50,5 +51,5 @@ class CosyVoice2TpPartModel(Qwen2TpPartModel):
             weight_dict=self.weight_dict,
         )
         self.pre_post_weight.verify_load()
-        [weight.verify_load() for weight in self.trans_layers_weight]            
-        return 
+        [weight.verify_load() for weight in self.trans_layers_weight]
+        return

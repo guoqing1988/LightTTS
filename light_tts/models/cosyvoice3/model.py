@@ -8,3 +8,7 @@ class CosyVoice3TpPartModel(CosyVoice2TpPartModel):
         self.fill_token = self.speech_token_size + 3
         self.stop_token_ids = [self.speech_token_size + i for i in range(200)]
         return
+
+    def _init_config(self):
+        super()._init_config()
+        self.embed_offset = self.config["vocab_size"]
