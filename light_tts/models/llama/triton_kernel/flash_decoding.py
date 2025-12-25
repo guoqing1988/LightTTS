@@ -4,6 +4,7 @@ from functools import lru_cache
 from frozendict import frozendict
 from typing import Dict
 
+
 class LlamaFlashDecodingStage1KernelConfig(KernelConfigs):
     kernel_name: str = "triton_flashdecoding"
 
@@ -44,7 +45,7 @@ class LlamaFlashDecodingStage1KernelConfig(KernelConfigs):
                 "stage2_num_stages": 2,
             }
             return config
-    
+
     @classmethod
     def save_config(cls, *args, **kwargs) -> None:
         key_params = {
@@ -57,13 +58,13 @@ class LlamaFlashDecodingStage1KernelConfig(KernelConfigs):
 
         cls.store_config(key_params, kwargs["store_json_ans"])
 
+
 def token_decode_attention_flash_decoding(
     q, infer_state, q_head_num, head_dim, cache_k, cache_v, out=None, alloc_tensor_func=torch.empty
 ):
     batch_size = infer_state.batch_size
-    avg_seq_len_in_batch = infer_state.total_token_num // batch_size
     run_config = LlamaFlashDecodingStage1KernelConfig.try_to_get_best_config(
-        batch_size, avg_seq_len_in_batch, head_dim, q_head_num, cache_k.shape[1], torch.float16
+        batch_size, infer_state.max_len_in_batch, head_dim, q_head_num, cache_k.shape[1], torch.float16
     )
     BLOCK_SEQ = run_config["BLOCK_SEQ"]
 

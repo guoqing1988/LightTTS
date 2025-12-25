@@ -64,8 +64,16 @@ class CosyVoiceFrontEnd:
         if self.use_ttsfrd:
             self.frd = ttsfrd.TtsFrontendEngine()
             ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-            assert self.frd.initialize('{}/../../pretrained_models/CosyVoice-ttsfrd/resource'.format(ROOT_DIR)) is True, \
-                'failed to initialize ttsfrd resource'
+            resource_paths = [
+                '{}/../../../pretrained_models/CosyVoice-ttsfrd/resource'.format(ROOT_DIR),
+                '{}/../../pretrained_models/CosyVoice-ttsfrd/resource'.format(ROOT_DIR)
+            ]
+            initialized = False
+            for path in resource_paths:
+                if self.frd.initialize(path):
+                    initialized = True
+                    break
+            assert initialized, 'failed to initialize ttsfrd resource'
             self.frd.set_lang_type('pinyinvg')
         else:
             self.zh_tn_model = ZhNormalizer(remove_erhua=False)
