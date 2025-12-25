@@ -15,7 +15,8 @@ RUN chmod 777 -R /tmp && apt-get update && DEBIAN_FRONTEND=noninteractive apt-ge
     g++ \
     make \
     git \
-    ffmpeg && \
+    ffmpeg \
+    unzip && \
     rm -rf /var/lib/apt/lists/*
 
 RUN case ${TARGETPLATFORM} in \
@@ -39,3 +40,7 @@ RUN pip install -r /lighttts/requirements.txt --no-cache-dir
 
 COPY . /lighttts
 WORKDIR /lighttts
+RUN cd pretrained_models/CosyVoice-ttsfrd/ && \
+    unzip resource.zip -d . && \
+    pip install ttsfrd_dependency-0.1-py3-none-any.whl && \
+    pip install ttsfrd-0.4.2-cp310-cp310-linux_x86_64.whl
