@@ -10,21 +10,33 @@ import random
 import websockets
 import base64
 import asyncio
+import argparse
 
-url = "ws://localhost:8080/inference_zero_shot_bistream"
+# 解析命令行参数
+parser = argparse.ArgumentParser(description="BiStream zero-shot TTS test script")
+parser.add_argument("--port", type=int, default=8090, help="Server port number (default: 8090)")
+parser.add_argument(
+    "--cosyvoice_version", type=int, choices=[2, 3], default=3, help="CosyVoice version: 2 or 3 (default: 3)"
+)
+args = parser.parse_args()
+
+url = f"ws://localhost:{args.port}/inference_zero_shot_bistream"
 num = 1
 # 准备要发送的文本和音频文件
 path = "../cosyvoice/asset/zero_shot_prompt.wav"
 res_list = []
 os.makedirs("./outs", exist_ok=True)
+
+
 def text_generator(index):
     for text in [
-        '收到好友从远方寄来的生日礼物，',
-        '那份意外的惊喜与深深的祝福',
-        '让我心中充满了甜蜜的快乐，',
-        '笑容如花儿般绽放。',
+        "收到好友从远方寄来的生日礼物，",
+        "那份意外的惊喜与深深的祝福",
+        "让我心中充满了甜蜜的快乐，",
+        "笑容如花儿般绽放。",
     ]:
         yield text
+
 
 async def send_texts(websocket: websockets.WebSocketClientProtocol, index):
     for text in text_generator(index):
@@ -33,6 +45,7 @@ async def send_texts(websocket: websockets.WebSocketClientProtocol, index):
         await asyncio.sleep(0.1)  # 模拟发送文本的时间
     await websocket.send(json.dumps({"finish": True}))  # 发
     print(f"Index {index}, Text sending completed.")
+
 
 async def receive_audio(websocket: websockets.WebSocketClientProtocol, index):
     audio_data = bytearray()
@@ -52,12 +65,19 @@ async def receive_audio(websocket: websockets.WebSocketClientProtocol, index):
         audio_np = np.frombuffer(audio_data, dtype=np.int16)
         sf.write(output_wav, audio_np, samplerate=sample_rate, subtype="PCM_16")
         print(f"Index {index}, Audio saved as {output_wav}.")
-    
+
+
 async def main(index):
     async with websockets.connect(url) as websocket:
         # Step 1: 发送初始化参数
+        # 根据 cosyvoice_version 设置 prompt_text
+        if args.cosyvoice_version == 3:
+            prompt_text = "You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。"
+        else:
+            prompt_text = "希望你以后能够做的比我还好呦。"
+
         init_params = {
-            "prompt_text": "希望你以后能够做的比我还好呦。",
+            "prompt_text": prompt_text,
         }
         await websocket.send(json.dumps(init_params))
         print("Sent initialization data.")
@@ -74,9 +94,11 @@ async def main(index):
         # 等待两个任务完成
         await asyncio.gather(send_task, receive_task)
 
+
 async def run_multiple():
     tasks = [main(index) for index in range(num)]
     await asyncio.gather(*tasks)
+
 
 # 运行主程序
 asyncio.run(run_multiple())

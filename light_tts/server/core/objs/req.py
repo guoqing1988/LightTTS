@@ -91,7 +91,7 @@ class Req(ctypes.Structure):
         ("bistream_input_finished", ctypes.c_bool),
         ("ignore_eos", ctypes.c_bool),
         ("text_cache_start", ctypes.c_int),
-        ("sos_eos_id", ctypes.c_int),
+        ("sos", ctypes.c_int),
         ("task_id", ctypes.c_int),
         ("bistream_first", ctypes.c_int),
         # normal
@@ -121,6 +121,7 @@ class Req(ctypes.Structure):
         ("finish_token_index", ctypes.c_int),
         ("out_tokens_queue", CircularQueue),
         ("sample_params", SamplingParams),
+        ("next_fill_index", ctypes.c_int),
         # can_released_mark的作用是：
         # 只有整个流程中的最后一个处理模块，一般是 detokenization 进程，标记这个参数为True后，主管理进程才能真
         # 的释放请求对像。
@@ -144,7 +145,7 @@ class Req(ctypes.Structure):
         prompt_ids: List[int],
         request_dict: dict,
         sample_param: Union[dict, SamplingParams],
-        sos_eos_id: int = 0,
+        sos: int = 0,
         task_id: int = 0,
         speed: float = 1.0,
     ):
@@ -174,19 +175,19 @@ class Req(ctypes.Structure):
         else:
             self.sample_params = SamplingParams()
             self.sample_params.init(**sample_param)
-
+        self.next_fill_index = -1
         self.stream = request_dict.get("stream", False)
         self.text_len = len(prompt_ids)
         self.semantic_len = request_dict.get("semantic_len", 0)
         self.gen_finished = False
         self.bistream = request_dict.get("bistream", False)
-        self.sos_eos_id = sos_eos_id
+        self.sos = sos
         self.task_id = task_id
 
         if self.bistream:
             self.assign_slice(self.text_cache, 0, prompt_ids)
             self.input_len = 1
-            self.prompt_ids[0] = self.sos_eos_id
+            self.prompt_ids[0] = self.sos
             self.text_cache_start = 0
             self.req_status = ReqRunStatus(ReqRunStatus.WAIT_FOR_TEXT)
             self.bistream_first = True
