@@ -27,7 +27,7 @@ logger = init_logger(__name__)
 
 
 class TTSDecodeManager:
-    def __init__(self, args, tts_decode_port, httpserver_port, style_name, decode_parall_lock, decode_proc_index):
+    def __init__(self, args, tts_decode_port, httpserver_port, decode_parall_lock, decode_proc_index):
         self.args = args
         context = zmq.asyncio.Context(2)
         self.recv_from_tts2_gpt = context.socket(zmq.PULL)
@@ -35,7 +35,6 @@ class TTSDecodeManager:
 
         self.send_to_httpserver = context.socket(zmq.PUSH)
         self.send_to_httpserver.connect(f"{args.zmq_mode}127.0.0.1:{httpserver_port}")
-        self.style_name = style_name
         self.waiting_reqs = []
         self.decode_parall_lock = decode_parall_lock
         self.decode_proc_index = decode_proc_index
@@ -119,7 +118,9 @@ class TTSDecodeManager:
                     try:
                         await self.infer_decodec_batch(batch)
                         self.send_to_httpserver.send_pyobj(None, protocol=pickle.HIGHEST_PROTOCOL)
-                        logger.debug(f"decode send to httpserver req_id {batch[0].req.request_id}")
+                        logger.debug(
+                            f"decode_proc_{self.decode_proc_index} send to httpserver req_id {batch[0].req.request_id}"
+                        )
                     except Exception as e:
                         logger.exception(str(e))
                     idle_count -= 1
@@ -127,7 +128,9 @@ class TTSDecodeManager:
                         torch.cuda.empty_cache()
                         torch.cuda.current_stream().synchronize()
                         idle_count = 1000
-                    logger.debug(f"{self.style_name} current waiting queue in tts_decode: {len(self.waiting_reqs)}")
+                    logger.debug(
+                        f"decode_proc_{self.decode_proc_index} current waiting queue : {len(self.waiting_reqs)}"
+                    )
                     self.remove_finished_reqs(batch)
 
     async def handle_loop(self):
@@ -156,25 +159,21 @@ class TTSDecodeManager:
                 pass
 
 
-def start_tts_decode_process(params_list, pipe_writer):
+def start_tts_decode_process(
+    args, tts_decode_port, httpserver_port, decode_parall_lock, decode_proc_index, pipe_writer
+):
     graceful_registry(inspect.currentframe().f_code.co_name)
 
     torch.backends.cudnn.enabled = True
-    managers = []
     try:
-        for params in params_list:
-            args, tts_decode_port, httpserver_port, style_name, decode_parall_lock, decode_proc_index = params
-
-            tts_decodec = TTSDecodeManager(
-                args,
-                tts_decode_port=tts_decode_port,
-                httpserver_port=httpserver_port,
-                style_name=style_name,
-                decode_parall_lock=decode_parall_lock,
-                decode_proc_index=decode_proc_index,
-            )
-            asyncio.run(tts_decodec.wait_to_model_ready())
-            managers.append(tts_decodec)
+        tts_decodec = TTSDecodeManager(
+            args,
+            tts_decode_port=tts_decode_port,
+            httpserver_port=httpserver_port,
+            decode_parall_lock=decode_parall_lock,
+            decode_proc_index=decode_proc_index,
+        )
+        asyncio.run(tts_decodec.wait_to_model_ready())
     except Exception:
         import traceback
         import sys
@@ -187,9 +186,8 @@ def start_tts_decode_process(params_list, pipe_writer):
 
     pipe_writer.send("init ok")
     loop = asyncio.new_event_loop()
-    for manager in managers:
-        loop.create_task(manager.loop_for_fwd())
-        loop.create_task(manager.handle_loop())
+    loop.create_task(tts_decodec.loop_for_fwd())
+    loop.create_task(tts_decodec.handle_loop())
 
     loop.run_forever()
     return

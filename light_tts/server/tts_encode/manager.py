@@ -87,6 +87,7 @@ class TTS1EncodeManager:
         for req_index in group_req_indexes.shm_req_indexes:
             req = self.shm_req_manager.get_req_obj_by_index(req_index)
             req.start_time = group_req_indexes.time_mark
+            req.style_name = group_req_indexes.style_name
             req_group.append(req)
 
             logger.info(f"tts_encode recive req_id {req.request_id} cost time {time.time() - req.start_time} s")
@@ -112,7 +113,7 @@ class TTS1EncodeManager:
                         self.shm_req_manager.put_back_req_obj(req)
                         req.can_released_mark = True
                         continue
-                    tts_model_name = "CosyVoice2"
+                    style_name = req.style_name
                     speech_index = req.speech_index
                     need_extract_speech = req.need_extract_speech
 
@@ -153,7 +154,7 @@ class TTS1EncodeManager:
                         f"semantic length {req.semantic_len} | text length {req.text_len} to tts_llm"
                     )
                     self.shm_req_manager.put_back_req_obj(req)
-                    self.send_to_tts_llms[tts_model_name].send_pyobj(req.index_in_shm_mem)
+                    self.send_to_tts_llms[style_name].send_pyobj(req.index_in_shm_mem)
                     cost_time = (time.time() - req.start_time) * 1000
                     logger.info(f"module {module_name} req_id {req.request_id} cost_time {cost_time} ms")
 

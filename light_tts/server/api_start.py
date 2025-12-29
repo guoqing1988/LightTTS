@@ -20,12 +20,14 @@ import uvloop
 import subprocess
 import time
 import os
+
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 import multiprocessing as mp
 from .httpserver.manager import HttpServerManager
 from pathlib import Path
 import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'cosyvoice'))
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "cosyvoice"))
 from .tts_encode.manager import start_tts1_encode_process
 from .tts_llm.manager import start_tts_llm_process
 from .tts_decode.manager import start_tts_decode_process
@@ -33,6 +35,7 @@ from .tts_decode.manager import start_tts_decode_process
 from light_tts.utils.net_utils import alloc_can_use_network_port, PortLocker
 from light_tts.utils.envs_utils import get_unique_server_name, set_env_start_args, set_unique_server_name
 from light_tts.utils.start_utils import process_manager
+from light_tts.utils.config_utils import get_config_json
 import signal
 import sys
 import uvicorn
@@ -41,6 +44,7 @@ from .health_monitor import start_health_check_process
 from light_tts.utils.log_utils import init_logger
 
 logger = init_logger(__name__)
+
 
 def setup_signal_handlers(http_server_process, process_manager):
     def signal_handler(sig, frame):
@@ -81,9 +85,10 @@ def setup_signal_handlers(http_server_process, process_manager):
     logger.info(f"http server pid {http_server_process.pid}")
     return
 
+
 def normal_start(args):
     set_unique_server_name(args)
-    
+
     assert args.max_req_total_len <= args.max_total_token_num
     assert args.zmq_mode in ["tcp://", "ipc:///tmp/"]
     # 确保单机上多实列不冲突
@@ -99,79 +104,82 @@ def normal_start(args):
         batch_max_tokens = max(batch_max_tokens, args.max_req_total_len)
         args.batch_max_tokens = batch_max_tokens
     else:
-        assert (
-            args.batch_max_tokens >= args.max_req_total_len
-        ), "batch_max_tokens must >= max_req_total_len"
+        assert args.batch_max_tokens >= args.max_req_total_len, "batch_max_tokens must >= max_req_total_len"
 
     # 提前锁定端口，防止在单个机器上启动多个实列的时候，要到模型启动的时候才能
     # 捕获到端口设置冲突的问题
     ports_locker = PortLocker([args.port])
     ports_locker.lock_port()
 
-    num_loras = 1
+    # 从配置文件读取 lora 信息
+    all_config = get_config_json(args.model_dir)
+    lora_info = all_config["lora_info"]
+    num_loras = len(lora_info)
+    style_names = [item["style_name"] for item in lora_info]
+    logger.info(f"Loading {num_loras} styles: {style_names}")
+
     assert args.decode_process_num <= num_loras
 
-    can_use_ports = alloc_can_use_network_port(
-        num=num_loras * 2 + args.encode_process_num + 100, used_nccl_port=None
-    )
+    can_use_ports = alloc_can_use_network_port(num=num_loras * 2 + args.encode_process_num + 100, used_nccl_port=None)
 
     httpserver_port = can_use_ports[0]
     del can_use_ports[0]
-    tts1_encode_ports = can_use_ports[0:args.encode_process_num]
-    del can_use_ports[0:args.encode_process_num]
-    
+    tts1_encode_ports = can_use_ports[0 : args.encode_process_num]
+    del can_use_ports[0 : args.encode_process_num]
+
     args.httpserver_port = httpserver_port
     args.tts1_encode_ports = tts1_encode_ports
 
-    tts_llm_ports = can_use_ports[0 : num_loras]
-    del can_use_ports[0 : num_loras]
+    tts_llm_ports = can_use_ports[0:num_loras]
+    del can_use_ports[0:num_loras]
 
     set_env_start_args(args)
     logger.info(f"all start args:{args}")
     ports_locker.release_port()
-    
+
     logger.info("=" * 80)
     logger.info("🚀 Starting LightTTS Server - FULL PARALLEL Mode")
     logger.info("⚡ All 3 components will start simultaneously!")
     logger.info("=" * 80)
-    
-    tts_decode_ports = can_use_ports[0 : num_loras]
-    del can_use_ports[0 : num_loras]
-    
+
+    tts_decode_ports = can_use_ports[0:num_loras]
+    del can_use_ports[0:num_loras]
+
     # 准备所有进程参数
     all_funcs = []
     all_start_args = []
-    
+
     # 1️⃣ 准备 Encode 进程
     encode_parall_lock = mp.Semaphore(args.encode_paral_num)
     for index_id in range(args.encode_process_num):
         all_funcs.append(start_tts1_encode_process)
         all_start_args.append((args, tts_llm_ports, tts1_encode_ports[index_id], index_id, encode_parall_lock))
-    
+
     # 2️⃣ 准备 LLM 进程
     gpt_parall_lock = mp.Semaphore(args.gpt_paral_num)
-    for style_name, tts_llm_port, tts_decode_port in zip(["CosyVoice2"], tts_llm_ports, tts_decode_ports): 
+    for idx, (style_name, tts_llm_port) in enumerate(zip(style_names, tts_llm_ports)):
+        tts_decode_port = tts_decode_ports[idx % args.decode_process_num]
         all_funcs.append(start_tts_llm_process)
         all_start_args.append((args, tts_llm_port, tts_decode_port, style_name, gpt_parall_lock))
-    
+
     # 3️⃣ 准备 Decode 进程
     decode_parall_lock = mp.Semaphore(args.decode_paral_num)
     for decode_proc_index in range(args.decode_process_num):
-        tmp_args = []
-        for style_name, tts_decode_port in zip(["CosyVoice2"], tts_decode_ports):
-            tmp_args.append((args, tts_decode_port, httpserver_port, style_name, decode_parall_lock, decode_proc_index))
         all_funcs.append(start_tts_decode_process)
-        all_start_args.append((tmp_args,))
-    
+        all_start_args.append(
+            (args, tts_decode_ports[decode_proc_index], httpserver_port, decode_parall_lock, decode_proc_index)
+        )
+
     # 🔥 激进模式：一次性启动 Encode + LLM + Decode，完全并行初始化！
     logger.info(f"🚀 Launching {len(all_funcs)} processes in parallel...")
     process_manager.start_submodule_processes(start_funcs=all_funcs, start_args=all_start_args)
-    
+
     logger.info("✅ All components started successfully!")
     logger.info("=" * 80)
 
     if os.getenv("LIGHTLLM_DEBUG") == "1":
         from light_tts.server.api_http import app
+
         server = uvicorn.Server(uvicorn.Config(app))
         server.install_signal_handlers()
         uvicorn.run(

@@ -18,6 +18,7 @@
 import io
 import asyncio
 import traceback
+from typing import List
 import torch
 import uvloop
 import hashlib
@@ -37,6 +38,7 @@ warnings.filterwarnings("ignore", category=UserWarning, message=".*weight_norm.*
 warnings.filterwarnings("ignore", category=UserWarning, module="onnxruntime")
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "cosyvoice"))
+from light_tts.utils.config_utils import get_config_json
 from light_tts.utils.load_utils import CosyVoiceVersion, load_yaml_frontend
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -82,7 +84,6 @@ from light_tts.server import TokenLoad
 
 logger = init_logger(__name__)
 g_id_gen = ReqIDGenerator()
-lora_styles = ["CosyVoice2"]
 
 
 @dataclass
@@ -91,6 +92,7 @@ class G_Objs:
     args: object = None
     httpserver_manager: HttpServerManager = None
     shared_token_load: TokenLoad = None
+    lora_styles: List[str] = None
 
     def set_args(self, args):
         self.args = args
@@ -98,6 +100,8 @@ class G_Objs:
             args, httpserver_port=args.httpserver_port, tts1_encode_ports=args.tts1_encode_ports
         )
         self.shared_token_load = TokenLoad(f"{get_unique_server_name()}_shared_token_load", 1)
+        all_config = get_config_json(args.model_dir)
+        self.lora_styles = [item["style_name"] for item in all_config["lora_info"]]
         configs = load_yaml_frontend(args.model_dir)
         if configs["cosyvoice_version"] == CosyVoiceVersion.VERSION_2:
             speech_tokenizer_model = "{}/speech_tokenizer_v2.onnx".format(args.model_dir)
@@ -134,7 +138,7 @@ async def healthcheck():
     if os.environ.get("DEBUG_HEALTHCHECK_RETURN_FAIL") == "true":
         return JSONResponse({"message": "Error"}, status_code=404)
 
-    if await health_check(g_objs.httpserver_manager, g_id_gen, lora_styles):
+    if await health_check(g_objs.httpserver_manager, g_id_gen, g_objs.lora_styles):
         return JSONResponse({"message": "Ok"}, status_code=200)
     else:
         return JSONResponse({"message": "Error"}, status_code=404)
@@ -182,7 +186,6 @@ async def send_wav(websocket: WebSocket, generator):
 
 @app.websocket("/inference_zero_shot_bistream")
 async def inference_zero_shot_bistream(websocket: WebSocket):
-    global lora_styles
     # 接受 WebSocket 连接
     await websocket.accept()
 
@@ -203,7 +206,7 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
     speech_md5 = calculate_md5(wav_bytes_io)
 
     if tts_model_name == "default":
-        tts_model_name = lora_styles[0]
+        tts_model_name = g_objs.lora_styles[0]
 
     speech_index, have_alloc = g_objs.httpserver_manager.alloc_speech_mem(speech_md5, prompt_speech_16k)
     request_id = g_id_gen.generate_id()
@@ -266,13 +269,12 @@ async def inference_zero_shot(
     speed: float = Form(default=1.0),
 ):
     all_request_counter.inc()
-    global lora_styles
 
     if stream and speed != 1.0:
         return create_error_response(HTTPStatus.BAD_REQUEST, "speed change only support non-stream inference mode")
 
     if tts_model_name == "default":
-        tts_model_name = lora_styles[0]
+        tts_model_name = g_objs.lora_styles[0]
 
     # 检查请求参数
     sample_params_dict = {}
@@ -334,7 +336,7 @@ async def inference_zero_shot(
 @app.post("/query_tts_model")
 @app.get("/query_tts_model")
 async def show_available_styles(request: Request) -> Response:
-    data = {"tts_models": lora_styles}
+    data = {"tts_models": g_objs.lora_styles}
     json_data = json.dumps(data)
     return Response(content=json_data, media_type="application/json")
 
