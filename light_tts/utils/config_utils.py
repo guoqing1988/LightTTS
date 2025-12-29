@@ -19,7 +19,7 @@ def get_config_json(model_dir):
         # 相对路径转绝对路径
         def modify_paths(data):
             if isinstance(data, dict):
-                for k in data.keys():
+                for k in list(data.keys()):  # 转换为列表避免迭代时修改字典大小
                     if k in ["llm_path", "gpt_model_path"]:
                         data["llm_path"] = trans_relative_to_abs_path(model_dir, data[k])
                     else:
