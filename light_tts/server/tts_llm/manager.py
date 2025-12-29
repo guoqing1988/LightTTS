@@ -31,6 +31,7 @@ import threading
 from light_tts.server.tts_llm.token_load import TokenLoad
 from light_tts.utils.envs_utils import get_unique_server_name
 from light_tts.utils.graceful_utils import graceful_registry
+from light_tts.utils.config_utils import get_style_gpt_path
 
 logger = init_logger(__name__)
 
@@ -51,6 +52,7 @@ class RouterManager:
 
         # tts
         self.style_name = style_name
+        self.pt_dir = get_style_gpt_path(args.model_dir, style_name)
         self.gpt_parall_lock = gpt_parall_lock
         self.has_lock = False
         self.parall_step_counter = 0
@@ -151,6 +153,7 @@ class RouterManager:
             "max_req_num": self.args.running_max_req_size + 8,
             "max_seq_length": self.args.max_req_total_len + 8,  # 留一点余量
             "style_name": self.style_name,
+            "pt_dir": self.pt_dir,
             "cache_capacity": self.args.cache_capacity,
             "port": self.args.port,
             "speech_token_size": self.speech_token_size,
@@ -169,6 +172,7 @@ class RouterManager:
 
         self.req_queue = build_req_queue(self.args, self, self.dp_size_in_node)
         logger.info(f"use req queue {self.req_queue.__class__.__name__}")
+        logger.info(f"{self.style_name} gpt path: {self.pt_dir} ready")
         return
 
     def add_req(self, req: Req):

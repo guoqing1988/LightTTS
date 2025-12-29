@@ -86,10 +86,10 @@ class HttpServerManager:
 
     async def transfer_to_next_module(
         self,
-        style,
+        style_name,
         group_req_objs: Optional[GroupReqObjs] = None,
     ):
-        self.send_to_tts1_encode_dict[style].send_pyobj(
+        self.send_to_tts1_encode_dict[style_name].send_pyobj(
             group_req_objs.to_group_req_index(),
             protocol=pickle.HIGHEST_PROTOCOL,
         )
@@ -184,15 +184,15 @@ class HttpServerManager:
                 await asyncio.sleep(0.1)
                 req_index = await self.shm_req_manager.async_alloc_req_index()
 
-            style = request_dict["tts_model_name"]
+            style_name = request_dict["tts_model_name"]
             req_obj = await self.shm_req_manager.async_get_req_obj_by_index(req_index)
             req_objs = []
             req_obj.init(request_id, prompt_ids, request_dict, sampling_params, self.sos, self.task_id, speed)
             req_objs.append(req_obj)
-            req_status = ReqStatus(request_id, req_objs, start_time)
+            req_status = ReqStatus(request_id, req_objs, start_time, style_name)
             self.req_id_to_out_inf[request_id] = req_status
 
-            await self.transfer_to_next_module(style, req_status.group_req_objs)
+            await self.transfer_to_next_module(style_name, req_status.group_req_objs)
 
             results_generator = self._wait_to_token_package(
                 request_id,
@@ -298,13 +298,14 @@ class HttpServerManager:
 
 
 class ReqStatus:
-    def __init__(self, req_id, req_objs: List[Req], start_time) -> None:
+    def __init__(self, req_id, req_objs: List[Req], start_time, style_name: str) -> None:
         self.lock = asyncio.Lock()
         self.event = asyncio.Event()
         self.group_req_objs = GroupReqObjs(
             group_req_id=req_id,
             shm_req_objs=req_objs,
             time_mark=start_time,
+            style_name=style_name,
         )
         self.out_data_info_list = []
 

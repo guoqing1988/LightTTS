@@ -62,7 +62,7 @@ class ModeBackend:
             "weight_dir": os.path.join(self.weight_dir, "CosyVoice-BlankEN"),
             "max_total_token_num": kvargs["max_total_token_num"],
             "load_way": kvargs["load_way"],
-            "pt_dir": os.path.join(self.weight_dir, "llm.pt"),
+            "pt_dir": kvargs["pt_dir"],
             "mode": kvargs["mode"],
             "max_req_num": kvargs.get("max_req_num", 1000),
             "max_seq_length": kvargs.get("max_seq_length", 1024 * 5),
