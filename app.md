@@ -11,5 +11,5 @@ uv pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple -
 
 ### 运行
 ```
-python -m light_tts.server.api_server --data_type float16 --load_trt True --model_dir /data/www/ComfyUI/models/cosyvoice/Fun-CosyVoice3-0.5B/FunAudioLLM/Fun-CosyVoice3-0.5B-2512                                        
+python -m light_tts.server.api_server --data_type float16 --load_trt True --gpu_memory_utilization 0.2 --max_model_len 2048 --model_dir /data/www/ComfyUI/models/cosyvoice/Fun-CosyVoice3-0.5B/FunAudioLLM/Fun-CosyVoice3-0.5B-2512                                        
 ```
