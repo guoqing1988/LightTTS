@@ -1,0 +1,74 @@
+[
+    {
+        "id": "default",
+        "file": "tone_man.wav",
+        "prompt_text": "You are a helpful assistant.<|endofprompt|>真不好意思，从小至今，他还从来没有被哪一位异性朋友亲吻过呢。",
+        "description": "男声"
+    },
+    {
+        "id": "tone_woman2",
+        "file": "tone_woman2.wav",
+        "prompt_text": "You are a helpful assistant.<|endofprompt|>您好，我是智能电话助手，很高兴为您服务。请问您需要咨询业务预约办理还是查询信息？",
+        "description": "女接线员"
+    },
+    {
+        "id": "tone_girl",
+        "file": "tone_girl.mp3",
+        "prompt_text": "You are a helpful assistant.<|endofprompt|>太阳公公出來了大家快起床新的一天又是元气满满。",
+        "description": "元气少女"
+    },
+    {
+        "id": "tone_newsman",
+        "file": "tone_newsman.wav",
+        "prompt_text": "You are a helpful assistant.<|endofprompt|>城市正在苏醒，新闻正在发生，我是您的早间新闻伙伴，让我们一起迎接新的一天。",
+        "description": "新闻播报男"
+    },
+    {
+        "id": "tone_oldman",
+        "file": "tone_oldman.mp3",
+        "prompt_text": "You are a helpful assistant.<|endofprompt|>来乖孙，爷爷给你讲个小时候的故事",
+        "description": "慈祥老爷爷"
+    },
+    {
+        "id": "tone_oldwoman",
+        "file": "tone_oldwoman.mp3",
+        "prompt_text": "You are a helpful assistant.<|endofprompt|>天气预报说,明天要降温,你可得多穿点，哎,你听没听见啊！",
+        "description": "唠叨奶奶",
+    },
+    {
+        "id": "tone_sunshine_boy",
+        "file": "tone_sunshine_boy.mp3",
+        "prompt_text": "You are a helpful assistant.<|endofprompt|>我们一起去公园野餐吧!阳光美食和好朋友，完美的周末就是这样的。",
+        "description": "阳光男生"
+    },
+    {
+        "id": "tone_overbearing_ceo",
+        "file": "tone_overbearing_ceo.wav",
+        "prompt_text": "You are a helpful assistant.<|endofprompt|>数据说话，结果证明一切把报告放我桌上，我们明天详谈。",
+        "description": "霸道男总裁"
+    },
+    {
+        "id": "tone_gentle_sister",
+        "file": "tone_gentle_sister.mp3",
+        "prompt_text": "You are a helpful assistant.<|endofprompt|>妈妈,您工作那么辛苦,晚餐就交给我来做吧！",
+        "description": "温柔小妹"
+    },
+    {
+        "id": "tone_fishing_girl",
+        "file": "tone_fishing_girl.wav",
+        "prompt_text": "You are a helpful assistant.<|endofprompt|>这个笔记我整理了好久呢，你要借的话可不能弄脏了！",
+        "description": "钓系少女",
+    },
+    {
+        "id": "tone_youthful_girl",
+        "file": "tone_youthful_girl.mp3",
+        "prompt_text": "You are a helpful assistant.<|endofprompt|>下周的才艺秀，我已经破不及待要在舞台上大展身手了。",
+        "description": "青春活力女生"
+    },
+    {
+        "id": "tone_humorous_boy",
+        "file": "tone_humorous_boy.mp3",
+        "prompt_text": "You are a helpful assistant.<|endofprompt|>有个小孩叫小杜,上街打醋又买布买了布打了醋回头看见鹰抓兔。",
+        "description": "风趣幽默男生"
+    }
+]

@@ -95,6 +95,7 @@ class G_Objs:
     shared_token_load: TokenLoad = None
     lora_styles: List[str] = None
     version: CosyVoiceVersion = None
+    tone_list: List[dict] = None
 
     def set_args(self, args):
         self.args = args
@@ -110,6 +111,16 @@ class G_Objs:
             speech_tokenizer_model = "{}/speech_tokenizer_v2.onnx".format(args.model_dir)
         else:
             speech_tokenizer_model = "{}/speech_tokenizer_v3.onnx".format(args.model_dir)
+
+        # Load tone list
+        asset_dir = os.path.join(Path(__file__).parent.parent.parent, "asset")
+        tone_path = os.path.join(asset_dir, "tone_list.json")
+        if os.path.exists(tone_path):
+            with open(tone_path, "r", encoding='utf-8') as f:
+                self.tone_list = json.load(f)
+        else:
+            self.tone_list = []
+
         self.frontend = CosyVoiceFrontEnd(
             configs["get_tokenizer"],
             configs["feat_extractor"],
@@ -198,15 +209,46 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
     # 解析固定参数
     prompt_text = init_params.get("prompt_text")
     tts_model_name = init_params.get("tts_model_name", "default")
+    voice_id = init_params.get("voice_id")
 
-    # 处理音频文件（假设客户端发送 base64 编码的音频）
-    prompt_wav_data = await websocket.receive_bytes()
-    wav_bytes_io = BytesIO(prompt_wav_data)
-    prompt_speech_16k = load_wav(wav_bytes_io, 16000)
+    prompt_speech_16k = None
+    
+    if voice_id:
+        # SFT 模式：从预设音色列表加载
+        found_voice = next((v for v in g_objs.tone_list if v["id"] == voice_id), None)
+        if found_voice:
+            asset_dir = os.path.join(Path(__file__).parent.parent.parent, "asset")
+            wav_path = os.path.join(asset_dir, found_voice["file"])
+            if os.path.exists(wav_path):
+                 prompt_speech_16k = load_wav(wav_path, 16000)
+                 prompt_text = found_voice["prompt_text"]
+                 
+                 # 计算MD5 (这里我们可以简单用voice_id作为唯一标识的一部或者重新计算)
+                 # 为了复用逻辑，我们还是读文件算MD5或者直接构造一个
+                 with open(wav_path, 'rb') as f:
+                     speech_md5 = calculate_md5(f) # calculate_md5 wants a file-like object
+            else:
+                 await websocket.send_json({"error": f"Voice file not found for id: {voice_id}"})
+                 await websocket.close()
+                 return
+        else:
+             await websocket.send_json({"error": f"Voice ID not found: {voice_id}"})
+             await websocket.close()
+             return
+    else:
+        # Zero-shot 模式：接收音频数据
+        # 处理音频文件（假设客户端发送 base64 编码的音频）
+        # 注意：前端现在是发二进制frame，不是base64 string in json usually for receive_bytes()
+        # 原有逻辑是 websocket.receive_bytes()
+        
+        prompt_wav_data = await websocket.receive_bytes()
+        wav_bytes_io = BytesIO(prompt_wav_data)
+        prompt_speech_16k = load_wav(wav_bytes_io, 16000)
+        
+        wav_bytes_io.seek(0)
+        speech_md5 = calculate_md5(wav_bytes_io)
+
     semantic_len = (prompt_speech_16k.shape[1] + 239) // 640 + 10  # + 10 for safe
-
-    wav_bytes_io.seek(0)
-    speech_md5 = calculate_md5(wav_bytes_io)
 
     if tts_model_name == "default":
         tts_model_name = g_objs.lora_styles[0]
@@ -265,8 +307,9 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
 async def inference_zero_shot(
     request: Request,
     tts_text: str = Form(),
-    prompt_text: str = Form(),
-    prompt_wav: UploadFile = File(),
+    prompt_text: str = Form(default=None),
+    voice_id: str = Form(default=None),
+    prompt_wav: UploadFile = File(default=None),
     stream: bool = Form(default=False),
     tts_model_name: str = Form(default="default"),
     speed: float = Form(default=1.0),
@@ -279,18 +322,48 @@ async def inference_zero_shot(
     if tts_model_name == "default":
         tts_model_name = g_objs.lora_styles[0]
 
+    # SFT Logic
+    prompt_speech_16k = None
+    
+    if voice_id:
+        found_voice = next((v for v in g_objs.tone_list if v["id"] == voice_id), None)
+        if not found_voice:
+             return create_error_response(HTTPStatus.BAD_REQUEST, f"Voice ID not found: {voice_id}")
+             
+        asset_dir = os.path.join(Path(__file__).parent.parent.parent, "asset")
+        wav_path = os.path.join(asset_dir, found_voice["file"])
+        if not os.path.exists(wav_path):
+             return create_error_response(HTTPStatus.INTERNAL_SERVER_ERROR, f"Voice file missing: {wav_path}")
+             
+        prompt_speech_16k = load_wav(wav_path, 16000)
+        prompt_text = found_voice["prompt_text"]
+        with open(wav_path, 'rb') as f:
+            speech_md5 = calculate_md5(f)
+    elif prompt_wav and prompt_text:
+        # Zero-shot logic
+        prompt_text = g_objs.frontend.text_normalize(prompt_text, split=False)
+        prompt_speech_16k = load_wav(prompt_wav.file, 16000)
+        prompt_wav.file.seek(0)
+        speech_md5 = calculate_md5(prompt_wav.file)
+    else:
+        return create_error_response(HTTPStatus.BAD_REQUEST, "Either voice_id OR (prompt_wav and prompt_text) must be provided")
+
     # 检查请求参数
     sample_params_dict = {}
     sampling_params = SamplingParams()
     sampling_params.init(**sample_params_dict)
     sampling_params.verify()
-    prompt_text = g_objs.frontend.text_normalize(prompt_text, split=False)
+    
+    # prompt_text is already set above
+    # prompt_text = g_objs.frontend.text_normalize(prompt_text, split=False) 
+    
     tts_texts = g_objs.frontend.text_normalize(tts_text, split=True)
-    prompt_speech_16k = load_wav(prompt_wav.file, 16000)
+    # prompt_speech_16k already loaded
+    
     semantic_len = (prompt_speech_16k.shape[1] + 239) // 640 + 10  # + 10 for safe
 
-    prompt_wav.file.seek(0)
-    speech_md5 = calculate_md5(prompt_wav.file)
+    # prompt_wav.file.seek(0)
+    # speech_md5 = calculate_md5(prompt_wav.file)
 
     generate_objs = []
     need_extract_speech = True
@@ -334,6 +407,11 @@ async def inference_zero_shot(
         except Exception as e:
             logger.error("An error occurred: %s", str(e), exc_info=True)
             return create_error_response(HTTPStatus.EXPECTATION_FAILED, str(e))
+
+
+@app.get("/tone_list")
+async def get_tone_list():
+    return JSONResponse(g_objs.tone_list if g_objs.tone_list else [])
 
 
 @app.post("/query_tts_model")

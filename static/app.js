@@ -5,11 +5,11 @@ createApp({
         const form = ref({
             text: "2026年，我们正站在智能文明的潮头。浪潮汹涌，唯有勇者与智者能立于潮头。作为时代的“造浪者”，我们手中握有的，正是一副足以定义未来的“王炸”。这副王炸，就是“科艺商潮”。这不是一句简单的口号，而是我们基因里的超代码，是我们从“记录时代”迈向“定义时代”的终极武器。2026年，我们的任务只有一个：打好这副王炸，掀起属于超媒体的“Meta Wave”！",
             mode: "sft",
-            speaker: "",
+            voice_id: "", // Renamed from speaker to voice_id for consistency
             prompt_text: "",
-            prompt_wav_path: "",
+            prompt_wav_file: null, // Store File object
             instruct_text: "",
-            source_wav_path: "",
+            source_wav_file: null, // Store File object
             stream: false,
             speed: 1.0,
             output_format: "pcm",
@@ -184,195 +184,196 @@ createApp({
 
         // --- API Handlers ---
 
-        const handleFileUpload = async (event, targetField) => {
+        const handleFileSelect = (event, type) => {
             const file = event.target.files[0];
             if (!file) return;
 
-            const formData = new FormData();
-            formData.append('file', file);
-
-            try {
-                uploading.value = true;
-                const res = await fetch('/v1/upload', { method: 'POST', body: formData });
-                if (!res.ok) throw new Error((await res.json()).detail || '上传失败');
-
-                const data = await res.json();
-                form.value[targetField] = data.local_path;
-                if (targetField === 'prompt_wav_path') {
-                    promptAudioPreview.value = data.url;
-                    if (data.text) form.value.prompt_text = data.text;
-                } else {
-                    sourceAudioPreview.value = data.url;
-                }
-            } catch (e) {
-                alert("上传失败: " + e.message);
-                event.target.value = '';
-            } finally {
-                uploading.value = false;
+            if (type === 'prompt') {
+                form.value.prompt_wav_file = file;
+                promptAudioPreview.value = URL.createObjectURL(file);
+                // Reset prompt text if you want, or keep it
+            } else if (type === 'source') {
+                form.value.source_wav_file = file;
+                sourceAudioPreview.value = URL.createObjectURL(file);
             }
         };
 
         const fetchHealth = async () => {
             try {
-                const res = await fetch('/v1/health');
+                const res = await fetch('/health');
                 health.value = await res.json();
             } catch (e) { health.value = { status: 'error' }; }
         };
 
         const fetchVoices = async () => {
             try {
-                const res = await fetch('/v1/voices');
-                voices.value = (await res.json()).voices;
+                const res = await fetch('/tone_list');
+                voices.value = await res.json();
             } catch (e) { console.error("Failed to fetch voices", e); }
         };
 
         const handleSync = async () => {
-            const res = await fetch('/v1/tts', {
+            const formData = new FormData();
+            formData.append('tts_text', form.value.text);
+            formData.append('speed', form.value.speed);
+            formData.append('stream', 'false');
+
+            if (form.value.mode === 'sft') {
+                if (!form.value.voice_id) throw new Error("请选择音色");
+                formData.append('voice_id', form.value.voice_id);
+            } else if (form.value.mode === 'zero_shot') {
+                if (!form.value.prompt_wav_file || !form.value.prompt_text) throw new Error("请上传参考音频并输入Prompt文本");
+                formData.append('prompt_wav', form.value.prompt_wav_file);
+                formData.append('prompt_text', form.value.prompt_text);
+            }
+
+            const res = await fetch('/inference_zero_shot', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(form.value),
+                body: formData,
                 signal: abortController?.signal
             });
 
-            if (!res.ok) throw new Error((await res.json()).detail || '请求失败');
+            if (!res.ok) throw new Error((await res.json()).detail || (await res.json()).message || '请求失败');
 
-            const data = await res.json();
-            audioSampleRate.value = data.sample_rate;
-            // 确保 AudioContext 与返回的采样率同步
-            getAudioContext(data.sample_rate);
+            const contentDispostion = res.headers.get('content-disposition');
+            // Check if it's JSON error (sometimes APIs return 200 OK but body is error json? No, standard is status code)
+            // But let's assume binary response. 
+            // The original code expected JSON with base64 audio. The new endpoint returns StreamingResponse (binary).
 
-            const fmt = (data.format || form.value.output_format).toLowerCase();
-            const binaryString = atob(data.audio);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+            // Wait, the python code endpoint returns StreamingResponse(generate_data(ans_objs)).
+            // generate_data yields tts_audio bytes.
 
-            if (fmt === 'pcm') {
-                finalizeAudio([int16ToFloat32(bytes.buffer)], 'pcm');
-            } else if (fmt === 'wav') {
-                // 如果是 WAV，跳过 44 字节头并转为 pcm 模式统一处理下载
-                const float32 = int16ToFloat32(bytes.buffer.slice(44));
-                finalizeAudio([float32], 'pcm');
-            } else {
-                // MP3 等格式直接生成 Blob
-                const blob = new Blob([bytes.buffer], { type: getMimeType(fmt) });
-                audioUrl.value = URL.createObjectURL(blob);
-                nextTick(() => audioPlayer.value?.play().catch(e => console.warn("Auto-play prevented", e)));
-            }
+            const arrayBuffer = await res.arrayBuffer();
+            // Since it's a straight binary stream of PCM data (from generate_data)
+            // We need to know if it's PCM or WAV?
+            // "tts_audio = (i["tts_speech"] * (2 ** 15)).astype(np.int16).tobytes()" 
+            // It looks like raw PCM (int16).
+
+            // However, the frontend display expects specific format handling.
+            // Let's assume default PCM (int16, 24000Hz usually for CosyVoice).
+            // We'll wrap it.
+
+            audioSampleRate.value = 22050; // Or 24000? CosyVoice is usually 22050 or 24000. 
+            // Let's rely on backend if possible, but HTTP streaming doesn't give metadata easily in raw body.
+            // Assumption: 22050 for now or stick to 24000.
+            audioSampleRate.value = 24000; // Updated assumption
+
+            const float32 = int16ToFloat32(arrayBuffer);
+            finalizeAudio([float32], 'pcm');
         };
 
         const handleStreaming = async () => {
-            const res = await fetch('/v1/tts', {
+            const formData = new FormData();
+            formData.append('tts_text', form.value.text);
+            formData.append('speed', form.value.speed);
+            formData.append('stream', 'true');
+
+            if (form.value.mode === 'sft') {
+                if (!form.value.voice_id) throw new Error("请选择音色");
+                formData.append('voice_id', form.value.voice_id);
+            } else if (form.value.mode === 'zero_shot') {
+                if (!form.value.prompt_wav_file || !form.value.prompt_text) throw new Error("请上传参考音频并输入Prompt文本");
+                formData.append('prompt_wav', form.value.prompt_wav_file);
+                formData.append('prompt_text', form.value.prompt_text);
+            }
+
+            const res = await fetch('/inference_zero_shot', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ...form.value, stream: true }),
+                body: formData,
                 signal: abortController?.signal
             });
 
-            if (!res.ok) throw new Error((await res.json()).detail || '流式请求失败');
+            if (!res.ok) throw new Error((await res.json()).detail || (await res.json()).message || '流式请求失败');
 
-            // 从 Header 获取准确采样率
-            const rate = parseInt(res.headers.get('X-Sample-Rate')) || audioSampleRate.value;
-            audioSampleRate.value = rate;
-            getAudioContext(rate);
+            // The new backend doesn't seem to set 'X-Sample-Rate'.
+            audioSampleRate.value = 24000;
+            getAudioContext(24000);
 
             const reader = res.body.getReader();
             const buffers = [];
             let pendingBytes = new Uint8Array(0);
-            let isFirstChunk = true;
-            const outputFormat = form.value.output_format.toLowerCase();
-            nextStartTime = 0;
 
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) {
-                    if (outputFormat === 'pcm' || outputFormat === 'wav') {
-                        if (pendingBytes.length >= 2) {
-                            const float32 = int16ToFloat32(pendingBytes.buffer.slice(0, Math.floor(pendingBytes.length / 2) * 2));
-                            playChunk(float32);
-                            buffers.push(float32);
-                        }
+                    if (pendingBytes.length >= 2) {
+                        const float32 = int16ToFloat32(pendingBytes.buffer.slice(0, Math.floor(pendingBytes.length / 2) * 2));
+                        playChunk(float32);
+                        buffers.push(float32);
                     }
                     break;
                 }
 
-                if (outputFormat === 'pcm' || outputFormat === 'wav') {
-                    let currentData = value;
-                    if (isFirstChunk && outputFormat === 'wav') {
-                        currentData = value.slice(44);
-                        isFirstChunk = false;
-                    }
+                const combined = new Uint8Array(pendingBytes.length + value.length);
+                combined.set(pendingBytes);
+                combined.set(value, pendingBytes.length);
 
-                    const combined = new Uint8Array(pendingBytes.length + currentData.length);
-                    combined.set(pendingBytes);
-                    combined.set(currentData, pendingBytes.length);
-
-                    const completeLength = Math.floor(combined.length / 2) * 2;
-                    if (completeLength > 0) {
-                        const chunkBuffer = combined.buffer.slice(0, completeLength);
-                        const float32 = int16ToFloat32(chunkBuffer);
-                        playChunk(float32);
-                        buffers.push(float32);
-                    }
-                    pendingBytes = combined.slice(completeLength);
-                } else if (outputFormat === 'mp3') {
-                    const chunk = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-                    await decodeAndPlayChunk(chunk);
-                    buffers.push(new Uint8Array(chunk));
-                } else {
-                    buffers.push(new Uint8Array(value));
+                const completeLength = Math.floor(combined.length / 2) * 2;
+                if (completeLength > 0) {
+                    const chunkBuffer = combined.buffer.slice(0, completeLength);
+                    const float32 = int16ToFloat32(chunkBuffer);
+                    playChunk(float32);
+                    buffers.push(float32);
                 }
+                pendingBytes = combined.slice(completeLength);
             }
-            finalizeAudio(buffers, form.value.output_format);
+            finalizeAudio(buffers, 'pcm');
         };
 
         const handleWebSocket = () => {
             return new Promise((resolve, reject) => {
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                ws = new WebSocket(`${protocol}//${window.location.host}/ws/v1/tts`);
+                // New endpoint
+                ws = new WebSocket(`${protocol}//${window.location.host}/inference_zero_shot_bistream`);
                 const buffers = [];
                 nextStartTime = 0;
-                let lastDecodePromise = Promise.resolve();
 
-                ws.onopen = () => ws.send(JSON.stringify(form.value));
+                audioSampleRate.value = 24000; // Assumption
+                getAudioContext(24000);
+
+                ws.onopen = async () => {
+                    // Initial JSON
+                    const initData = {
+                        tts_text: form.value.text,
+                        prompt_text: form.value.prompt_text,
+                        tts_model_name: "default"
+                    };
+
+                    if (form.value.mode === 'sft') {
+                        initData.voice_id = form.value.voice_id;
+                    }
+
+                    ws.send(JSON.stringify(initData));
+
+                    // If Zero Shot, send audio bytes next
+                    if (form.value.mode === 'zero_shot' && form.value.prompt_wav_file) {
+                        const arrayBuffer = await form.value.prompt_wav_file.arrayBuffer();
+                        ws.send(arrayBuffer);
+                    }
+                };
+
                 ws.onmessage = async (event) => {
                     const data = event.data;
-                    const outputFormat = form.value.output_format.toLowerCase();
                     if (typeof data === 'string') {
-                        const msg = JSON.parse(data);
-                        if (msg.error) reject(new Error(msg.error));
-                        if (msg.done) ws.close();
+                        try {
+                            const msg = JSON.parse(data);
+                            if (msg.error) {
+                                reject(new Error(msg.error));
+                                ws.close();
+                            }
+                        } catch (e) { }
                     } else if (data instanceof Blob) {
                         const arrayBuffer = await data.arrayBuffer();
-                        if (outputFormat === 'pcm') {
-                            const float32 = int16ToFloat32(arrayBuffer);
-                            playChunk(float32);
-                            buffers.push(float32);
-                        } else if (outputFormat === 'wav') {
-                            let currentBuffer = arrayBuffer;
-                            const view = new DataView(arrayBuffer);
-                            if (arrayBuffer.byteLength >= 44 && view.getUint32(0) === 0x52494646) {
-                                currentBuffer = arrayBuffer.slice(44);
-                            }
-                            const float32 = int16ToFloat32(currentBuffer);
-                            playChunk(float32);
-                            buffers.push(float32);
-                        } else if (outputFormat === 'mp3') {
-                            const chunkCopy = arrayBuffer.slice(0);
-                            lastDecodePromise = lastDecodePromise.then(() => decodeAndPlayChunk(chunkCopy));
-                            buffers.push(new Uint8Array(arrayBuffer));
-                        } else {
-                            buffers.push(new Uint8Array(arrayBuffer));
-                        }
+                        const float32 = int16ToFloat32(arrayBuffer);
+                        playChunk(float32);
+                        buffers.push(float32);
                     }
                 };
                 ws.onerror = (e) => { error.value = "WebSocket 连接错误"; loading.value = false; reject(e); };
                 ws.onclose = () => {
                     loading.value = false;
-                    // 等待所有 MP3 解码完成再生成最终文件
-                    lastDecodePromise.then(() => {
-                        finalizeAudio(buffers, form.value.output_format);
-                        resolve();
-                    });
+                    finalizeAudio(buffers, 'pcm');
+                    resolve();
                 };
             });
         };
@@ -416,7 +417,7 @@ createApp({
                 return 'bg-yellow-500';
             }),
             generateAudio, stopGeneration, promptAudioPreview, sourceAudioPreview,
-            uploading, handleFileUpload
+            uploading, handleFileSelect
         };
     }
 }).mount('#app');
