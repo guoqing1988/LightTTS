@@ -48,6 +48,7 @@ from http import HTTPStatus
 import numpy as np
 from fastapi import FastAPI, UploadFile, Form, File, BackgroundTasks, Request, WebSocketDisconnect, WebSocket
 from fastapi.responses import Response, StreamingResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 import soundfile as sf
 from io import BytesIO
@@ -387,3 +388,18 @@ async def startup_event():
     logger.info(f"🌐 Listening at: http://{g_objs.args.host}:{g_objs.args.port}")
     logger.info("=" * 60)
     return
+
+
+# ========== 静态文件服务 ==========
+
+asset_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "asset")
+if os.path.exists(asset_dir):
+    app.mount("/asset", StaticFiles(directory=asset_dir), name="asset")
+    logger.info(f"📁 asset文件目录: {asset_dir}")
+
+
+# 挂载静态文件 - 必须放在最后以避免遮蔽 API 路由
+static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+if os.path.exists(static_dir):
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+    logger.info(f"📁 静态文件目录: {static_dir}")

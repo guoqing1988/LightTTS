@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CosyVoice API 控制台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        [v-cloak] {
+            display: none;
+        }
+
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+    </style>
+</head>
+
+<body class="bg-gray-50 min-h-screen">
+    <div id="app" v-cloak>
+        <!-- Header -->
+        <header class="gradient-bg text-white shadow-lg p-6 mb-8">
+            <div class="container mx-auto flex justify-between items-center">
+                <div class="flex items-center space-x-3">
+                    <i class="fas fa-microphone-alt text-3xl"></i>
+                    <h1 class="text-2xl font-bold tracking-tight">CosyVoice API 控制台</h1>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span class="flex items-center bg-white/20 px-3 py-1 rounded-full text-sm">
+                        <span :class="statusClass" class="w-2 h-2 rounded-full mr-2"></span>
+                        状态: {{ health.status || '检查中...' }}
+                    </span>
+                    <span v-if="health.gpu"
+                        class="bg-green-500/20 px-3 py-1 rounded-full text-sm border border-green-400/30">
+                        GPU 加速已开启
+                    </span>
+                </div>
+            </div>
+        </header>
+
+        <main class="container mx-auto px-4 pb-12">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Configuration Panel -->
+                <div class="lg:col-span-1 space-y-6">
+                    <section class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                        <h2 class="text-lg font-semibold mb-4 flex items-center">
+                            <i class="fas fa-sliders-h mr-2 text-indigo-500"></i> 推理配置
+                        </h2>
+
+                        <!-- Mode Selection -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">推理模式</label>
+                            <select v-model="form.mode"
+                                class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 transition-all">
+                                <option value="sft">预训练音色 (SFT)</option>
+                                <option value="zero_shot">3s 极速复刻 (Zero Shot)</option>
+                                <option value="cross_lingual">跨语种复刻 (Cross Lingual)</option>
+                                <!-- <option value="instruct">自然语言控制 (Instruct)</option> -->
+                                <option value="vc">声音转换 (VC)</option>
+                            </select>
+                        </div>
+
+                        <!-- Speaker Selection (SFT/Instruct) -->
+                        <div v-if="['sft', 'instruct'].includes(form.mode)" class="mb-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">选择音色</label>
+                            <select v-model="form.speaker"
+                                class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                                <option value="">请选择</option>
+                                <option v-for="(voice, index) in voices" :key="index" :value="voice.id">{{
+                                    voice.description }}</option>
+                            </select>
+                            <audio v-if="form.speaker"
+                                :src="'/asset/' + voices.find((voice) => voice.id === form.speaker).file" controls
+                                class="w-full mb-4 mt-4"></audio>
+                        </div>
+
+                        <!-- Speed Adjustment -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">语速调节 ({{ form.speed }})</label>
+                            <input type="range" v-model.number="form.speed" min="0.5" max="2.0" step="0.1"
+                                class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600">
+                        </div>
+
+                        <!-- Output Format Selection -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">输出格式</label>
+                            <select v-model="form.output_format"
+                                class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                                <option value="pcm">PCM (原始数据)</option>
+                                <option value="wav">WAV (带文件头)</option>
+                                <option value="mp3">MP3 (压缩格式)</option>
+                            </select>
+                        </div>
+
+                        <!-- Protocol Selection -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">请求协议</label>
+                            <div class="flex items-center space-x-4">
+                                <label class="flex items-center cursor-pointer">
+                                    <input type="radio" v-model="form.protocol" value="http"
+                                        class="text-indigo-600 focus:ring-indigo-500 mr-2">
+                                    <span class="text-sm text-gray-700">HTTP</span>
+                                </label>
+                                <label class="flex items-center cursor-pointer">
+                                    <input type="radio" v-model="form.protocol" value="ws"
+                                        class="text-indigo-600 focus:ring-indigo-500 mr-2">
+                                    <span class="text-sm text-gray-700">WebSocket</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Options -->
+                        <div class="flex items-center space-x-4 mb-4">
+                            <label class="flex items-center cursor-pointer">
+                                <input type="checkbox" v-model="form.stream"
+                                    class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 mr-2">
+                                <span class="text-sm text-gray-700">流式推理</span>
+                            </label>
+                        </div>
+                    </section>
+
+                    <!-- Advanced Path Configuration -->
+                    <section class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                        <h2 class="text-lg font-semibold mb-4 flex items-center">
+                            <i class="fas fa-folder-open mr-2 text-indigo-500"></i> 文件路径
+                        </h2>
+                        <div class="space-y-4">
+                            <div v-if="['zero_shot', 'cross_lingual', 'instruct', 'vc'].includes(form.mode)">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Prompt 音频</label>
+                                <input type="hidden" v-model="form.prompt_wav_path">
+                                <div class="space-y-2">
+                                    <input type="file" accept=".wav,.mp3,.flac"
+                                        @change="handleFileUpload($event, 'prompt_wav_path')"
+                                        class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 transition-all">
+                                    <audio v-if="promptAudioPreview" :src="promptAudioPreview" controls
+                                        class="w-full h-8"></audio>
+                                    <p v-if="form.prompt_wav_path" class="text-xs text-gray-500 break-all">
+                                        已选: {{ form.prompt_wav_path }}
+                                    </p>
+                                </div>
+                            </div>
+                            <div v-if="form.mode === 'zero_shot'">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Prompt 文本</label>
+                                <textarea v-model="form.prompt_text" rows="2"
+                                    class="w-full rounded-lg border-gray-300 text-sm"
+                                    placeholder="输入与 Prompt 音频一致的文本"></textarea>
+                            </div>
+                            <div v-if="form.mode === 'instruct'">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">指令文本 (Instruct)</label>
+                                <input type="text" v-model="form.instruct_text" placeholder="例如: 请用尽可能快的语速说..."
+                                    class="w-full rounded-lg border-gray-300 text-sm">
+                            </div>
+                            <div v-if="form.mode === 'vc'">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">源音频 (Source)</label>
+                                <input type="hidden" v-model="form.source_wav_path">
+                                <div class="space-y-2">
+                                    <input type="file" accept=".wav,.mp3,.flac"
+                                        @change="handleFileUpload($event, 'source_wav_path')"
+                                        class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 transition-all">
+                                    <audio v-if="sourceAudioPreview" :src="sourceAudioPreview" controls
+                                        class="w-full h-8"></audio>
+                                    <p v-if="form.source_wav_path" class="text-xs text-gray-500 break-all">
+                                        已选: {{ form.source_wav_path }}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- Input/Output Panel -->
+                <div class="lg:col-span-2 space-y-6">
+                    <section class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 h-full flex flex-col">
+                        <h2 class="text-lg font-semibold mb-4 flex items-center">
+                            <i class="fas fa-keyboard mr-2 text-indigo-500"></i> 合成文本
+                        </h2>
+                        <textarea v-model="form.text" rows="6"
+                            class="w-full rounded-xl border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 flex-grow p-4 text-lg"
+                            placeholder="在此输入需要合成的文字..."></textarea>
+
+                        <div class="mt-6 flex flex-wrap gap-4">
+                            <button @click="generateAudio" :disabled="loading"
+                                class="flex-grow bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-xl transition-all shadow-md disabled:opacity-50 flex items-center justify-center">
+                                <i v-if="loading" class="fas fa-spinner fa-spin mr-2"></i>
+                                <span v-if="loading">{{ form.stream ? '流式生成中...' : '正在生成...' }}</span>
+                                <span v-else>立即生成语音</span>
+                            </button>
+                            <button @click="stopGeneration" v-if="loading && form.stream"
+                                class="bg-red-100 text-red-600 hover:bg-red-200 px-6 py-3 rounded-xl font-semibold transition-all">
+                                停止
+                            </button>
+                        </div>
+                    </section>
+
+                    <!-- Results Section -->
+                    <section class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                        <h2 class="text-lg font-semibold mb-4 flex items-center">
+                            <i class="fas fa-play-circle mr-2 text-indigo-500"></i> 输出结果
+                        </h2>
+
+                        <div v-if="audioUrl" class="bg-gray-50 rounded-xl p-6 border border-gray-100">
+                            <audio ref="audioPlayer" :src="audioUrl" controls class="w-full mb-4"></audio>
+                            <div class="flex justify-between items-center text-sm text-gray-500">
+                                <span>采样率: {{ audioSampleRate }}Hz</span>
+                                <a :href="audioUrl" download="output.wav"
+                                    class="text-indigo-600 hover:underline font-medium">下载音频</a>
+                            </div>
+                        </div>
+
+                        <div v-else-if="loading" class="flex flex-col items-center py-12 text-gray-400">
+                            <div class="animate-pulse space-y-4 w-full px-12 text-center">
+                                <div class="h-4 bg-gray-200 rounded w-3/4 mx-auto"></div>
+                                <div class="h-4 bg-gray-200 rounded w-1/2 mx-auto"></div>
+                                <p class="mt-4" v-if="form.stream">
+                                    <i class="fas fa-broadcast-tower mr-2"></i>
+                                    流式生成中,音频将实时播放...
+                                </p>
+                                <p class="mt-4" v-else>语音正在飞速合成中,请稍候...</p>
+                            </div>
+                        </div>
+
+                        <div v-else
+                            class="flex flex-col items-center py-12 text-gray-400 border-2 border-dashed border-gray-100 rounded-xl">
+                            <i class="fas fa-music text-4xl mb-4"></i>
+                            <p>等待生成，音频将显示在这里</p>
+                        </div>
+                    </section>
+
+                    <!-- Logs/Error Console -->
+                    <section v-if="error"
+                        class="bg-red-50 border border-red-100 rounded-xl p-4 text-red-700 text-sm flex items-start">
+                        <i class="fas fa-exclamation-circle mt-1 mr-3"></i>
+                        <div>
+                            <p class="font-bold">生成失败</p>
+                            <p>{{ error }}</p>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <!-- <footer class="text-center py-8 text-gray-400 text-sm">
+            <p>© 2026 CosyVoice API 控制台 | Powered by FunAudioLLM & vLLM</p>
+        </footer> -->
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
