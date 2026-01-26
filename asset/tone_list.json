@@ -33,7 +33,7 @@
         "id": "tone_oldwoman",
         "file": "tone_oldwoman.mp3",
         "prompt_text": "You are a helpful assistant.<|endofprompt|>天气预报说,明天要降温,你可得多穿点，哎,你听没听见啊！",
-        "description": "唠叨奶奶",
+        "description": "唠叨奶奶"
     },
     {
         "id": "tone_sunshine_boy",
