@@ -1,0 +1,37 @@
+[Unit]
+Description=LightTTS 高并发语音生成 API 服务
+After=network.target
+# 如果需要 GPU，可以取消下面注释（取决于驱动）
+# Wants=nvidia-persistenced.service
+
+[Service]
+Type=simple
+
+# 设置工作目录
+WorkingDirectory=/data/www/wwwroot/LightTTSApi
+
+# 环境变量配置
+Environment="HF_ENDPOINT=https://hf-mirror.com"
+Environment="PATH=/data/www/wwwroot/LightTTSApi/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+
+# 启动命令：使用生产环境建议参数
+ExecStart=/data/www/wwwroot/LightTTSApi/.venv/bin/python -m light_tts.server.api_server \
+      --data_type float16 \
+      --load_trt True \
+      --model_dir /data/www/ComfyUI/models/cosyvoice/Fun-CosyVoice3-0.5B/FunAudioLLM/Fun-CosyVoice3-0.5B-2512 \
+      --port 9705 \
+      --host 0.0.0.0
+
+# 自动重启配置
+Restart=always
+RestartSec=5
+
+# 资源限制
+LimitNOFILE=65535
+
+# 日志输出
+#StandardOutput=append:/var/log/lighttts.log
+#StandardError=append:/var/log/lighttts.err.log
+
+[Install]
+WantedBy=multi-user.target
