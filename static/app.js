@@ -375,6 +375,7 @@ createApp({
                         const initData = {
                             prompt_text: form.value.prompt_text,
                             tts_model_name: "default",
+                            speed: form.value.speed,
                             output_format: form.value.output_format  // 新增输出格式参数
                         };
 
@@ -394,7 +395,7 @@ createApp({
                         const textChunks = splitTextByPunctuation(form.value.text, 10);
                         console.log('文本切分为', textChunks.length, '段:', textChunks);
 
-                        // 逐段发送文本
+                        // 逐段发送文本（后端会同步等待每段完成，无需延迟）
                         for (let i = 0; i < textChunks.length; i++) {
                             const isLast = i === textChunks.length - 1;
                             const payload = {

@@ -255,6 +255,7 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
     prompt_text = init_params.get("prompt_text")
     tts_model_name = init_params.get("tts_model_name", "default")
     voice_id = init_params.get("voice_id")
+    speed = init_params.get("speed", 1.0)
     output_format = init_params.get("output_format", "pcm")  # 默认 PCM 格式
     
     # 验证输出格式
@@ -312,7 +313,7 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
     sampling_params.init(**sample_params_dict)
     sampling_params.verify()
     
-    need_extract_speech = not have_alloc
+    need_extract_speech = True
     
     try:
         while True:
@@ -328,12 +329,13 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
                 "prompt_text": prompt_text,
                 "tts_model_name": tts_model_name,
                 "speech_md5": speech_md5,
-                "need_extract_speech": need_extract_speech,
+                "need_extract_speech": need_extract_speech and not have_alloc,
                 "stream": True,
                 "speech_index": speech_index,
                 "semantic_len": semantic_len,
-                "bistream": False,  # 改为非 bistream 模式，每段独立处理
-                "append": False,     # 不追加，每段独立
+                "speed": speed,
+                # "bistream": False,  # 改为非 bistream 模式，每段独立处理
+                # "append": False,     # 不追加，每段独立
             }
             
             # 只有第一段需要提取语音特征
@@ -354,8 +356,8 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
         await websocket.send_json({"error": f"Server error: {str(e)}"})
     finally:
         await websocket.close()
-        if process_task is not None:
-            process_task.cancel()
+        # if process_task is not None:
+        #     process_task.cancel()
 
 
 @histogram_timer(request_latency_histogram)
