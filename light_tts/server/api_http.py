@@ -306,42 +306,100 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
         tts_model_name = g_objs.lora_styles[0]
 
     speech_index, have_alloc = g_objs.httpserver_manager.alloc_speech_mem(speech_md5, prompt_speech_16k)
-    request_id = g_id_gen.generate_id()
-    first_text = True
     prompt_text = g_objs.frontend.text_normalize(prompt_text, split=False)
-    process_task = None
     sample_params_dict = {}
     sampling_params = SamplingParams()
     sampling_params.init(**sample_params_dict)
     sampling_params.verify()
+    
+    # 智能混合模式的状态管理
+    need_extract_speech = not have_alloc
+    accumulated_tokens = 0  # 累积的 token 数量
+    MAX_TOKENS = 2800  # 安全限制（低于 TensorRT 的 3000）
+    
+    request_id = None
+    process_task = None
+    first_request = True
+    
     try:
         while True:
             input_data = await websocket.receive_json()
             tts_text = input_data.get("tts_text", "")
+            is_finish = input_data.get("finish", False)
+            
+            # 估算当前文本的 token 数量（粗略估算：中文约1.5倍字符数）
+            estimated_tokens = int(len(tts_text) * 1.5)
+            
+            # 判断是否需要切换到新分段
+            need_new_segment = accumulated_tokens + estimated_tokens > MAX_TOKENS
+            
+            if need_new_segment and not first_request:
+                # 超过限制，结束当前请求并开启新分段
+                logger.info(f"Token limit approaching ({accumulated_tokens} + {estimated_tokens} > {MAX_TOKENS}), starting new segment")
+                
+                # 结束当前 append 请求
+                finish_req_dict = {
+                    "text": "",
+                    "prompt_text": prompt_text,
+                    "tts_model_name": tts_model_name,
+                    "speech_md5": speech_md5,
+                    "need_extract_speech": False,
+                    "stream": True,
+                    "speech_index": speech_index,
+                    "semantic_len": semantic_len,
+                    "bistream": True,
+                    "append": True,
+                    "finish": True,
+                }
+                await g_objs.httpserver_manager.append_bistream(finish_req_dict, request_id)
+                await process_task  # 等待当前分段完成
+                
+                # 重置状态，开启新分段
+                accumulated_tokens = 0
+                request_id = None
+                first_request = True
+                logger.info("New segment started, token counter reset")
+            
+            # 创建请求配置
             cur_req_dict = {
                 "text": tts_text,
                 "prompt_text": prompt_text,
                 "tts_model_name": tts_model_name,
                 "speech_md5": speech_md5,
-                "need_extract_speech": first_text and not have_alloc,
+                "need_extract_speech": need_extract_speech,
                 "stream": True,
                 "speech_index": speech_index,
                 "semantic_len": semantic_len,
                 "bistream": True,
-                "append": not first_text,
+                "append": not first_request,
             }
-            if input_data.get("finish", False):
+            
+            # 更新累积 token 数
+            accumulated_tokens += estimated_tokens
+            
+            if is_finish:
+                # 最后一段，标记结束
                 cur_req_dict["finish"] = True
                 cur_req_dict["append"] = True
-                await g_objs.httpserver_manager.append_bistream(cur_req_dict, request_id)
+                if request_id:
+                    await g_objs.httpserver_manager.append_bistream(cur_req_dict, request_id)
                 break
-            elif first_text:
+            elif first_request:
+                # 第一段或新分段的第一段，创建新请求
+                request_id = g_id_gen.generate_id()
                 generator = g_objs.httpserver_manager.generate(cur_req_dict, request_id, sampling_params)
                 process_task = asyncio.create_task(send_wav(websocket, generator, output_format=output_format))
-                first_text = False
+                first_request = False
+                need_extract_speech = False  # 后续段不再提取
+                logger.info(f"Request {request_id} started, accumulated_tokens: {accumulated_tokens}")
             else:
+                # 后续段，追加到当前请求
                 await g_objs.httpserver_manager.append_bistream(cur_req_dict, request_id)
-        await process_task
+                logger.debug(f"Request {request_id} appended, accumulated_tokens: {accumulated_tokens}")
+        
+        # 等待最后的任务完成
+        if process_task:
+            await process_task
     except WebSocketDisconnect:
         # 处理客户端断开连接
         await g_objs.httpserver_manager.abort(request_id)
