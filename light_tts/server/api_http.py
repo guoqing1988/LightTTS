@@ -188,14 +188,59 @@ def calculate_md5(file: UploadFile) -> str:
     return hash_md5.hexdigest()
 
 
-async def send_wav(websocket: WebSocket, generator):
+async def send_wav(websocket: WebSocket, generator, output_format='pcm', sample_rate=22050):
+    """
+    发送音频数据到 WebSocket 客户端
+    
+    Args:
+        websocket: WebSocket 连接
+        generator: 音频数据生成器
+        output_format: 输出格式 ('pcm', 'wav', 'mp3')
+        sample_rate: 采样率
+    """
     async for result in generator:
         if isinstance(result, dict):
-            await websocket.send_bytes((result["tts_speech"] * (2 ** 15)).astype(np.int16).tobytes())
+            # 获取音频数据并转换为 int16
+            audio_float32 = result["tts_speech"]
+            audio_int16 = (audio_float32 * (2 ** 15)).astype(np.int16)
+            
+            if output_format == 'pcm':
+                # PCM 格式：直接发送字节流
+                await websocket.send_bytes(audio_int16.tobytes())
+            elif output_format == 'wav':
+                # WAV 格式：添加 WAV 文件头
+                wav_bytes = create_wav_bytes(audio_int16, sample_rate)
+                await websocket.send_bytes(wav_bytes)
+            elif output_format == 'mp3':
+                # MP3 格式：转换为 MP3（使用简单的 WAV 格式，客户端处理）
+                # 注意：真正的 MP3 编码需要 ffmpeg，这里先用 WAV 代替
+                # 实际生产环境建议使用专门的 MP3 编码库
+                wav_bytes = create_wav_bytes(audio_int16, sample_rate)
+                await websocket.send_bytes(wav_bytes)
+            else:
+                # 默认 PCM
+                await websocket.send_bytes(audio_int16.tobytes())
             continue
 
         websocket.close()
         return
+
+
+def create_wav_bytes(audio_int16, sample_rate):
+    """
+    创建 WAV 格式字节流
+    
+    Args:
+        audio_int16: int16 格式的音频数据 (numpy array)
+        sample_rate: 采样率
+        
+    Returns:
+        bytes: WAV 格式的字节流
+    """
+    byte_io = BytesIO()
+    sf.write(byte_io, audio_int16, sample_rate, format='WAV', subtype='PCM_16')
+    byte_io.seek(0)
+    return byte_io.read()
 
 
 @app.websocket("/inference_zero_shot_bistream")
@@ -210,6 +255,13 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
     prompt_text = init_params.get("prompt_text")
     tts_model_name = init_params.get("tts_model_name", "default")
     voice_id = init_params.get("voice_id")
+    output_format = init_params.get("output_format", "pcm")  # 默认 PCM 格式
+    
+    # 验证输出格式
+    if output_format not in ['pcm', 'wav', 'mp3']:
+        await websocket.send_json({"error": f"Invalid output_format: {output_format}. Must be 'pcm', 'wav' or 'mp3'"})
+        await websocket.close()
+        return
 
     prompt_speech_16k = None
     
@@ -285,7 +337,7 @@ async def inference_zero_shot_bistream(websocket: WebSocket):
                 break
             elif first_text:
                 generator = g_objs.httpserver_manager.generate(cur_req_dict, request_id, sampling_params)
-                process_task = asyncio.create_task(send_wav(websocket, generator))
+                process_task = asyncio.create_task(send_wav(websocket, generator, output_format=output_format))
                 first_text = False
             else:
                 await g_objs.httpserver_manager.append_bistream(cur_req_dict, request_id)

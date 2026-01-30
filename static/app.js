@@ -34,6 +34,45 @@ createApp({
 
         // --- Utilities ---
 
+        const splitTextByPunctuation = (text, minLength = 10) => {
+            /**
+             * 按标点符号切分文本，确保每段至少 minLength 个字符
+             * @param {string} text - 要切分的文本
+             * @param {number} minLength - 每段最小字符数
+             * @returns {string[]} 切分后的文本数组
+             */
+            if (!text || text.trim().length === 0) return [];
+
+            // 匹配中英文标点符号
+            const punctuationRegex = /([。！？；.!?;])/;
+            const parts = text.split(punctuationRegex);
+
+            const chunks = [];
+            let currentChunk = '';
+
+            for (let i = 0; i < parts.length; i++) {
+                currentChunk += parts[i];
+
+                // 遇到标点符号且累积长度 >= minLength
+                if (punctuationRegex.test(parts[i]) && currentChunk.length >= minLength) {
+                    chunks.push(currentChunk.trim());
+                    currentChunk = '';
+                }
+            }
+
+            // 处理剩余文本
+            if (currentChunk.trim()) {
+                if (chunks.length > 0 && currentChunk.trim().length < minLength) {
+                    // 合并到上一个片段
+                    chunks[chunks.length - 1] += currentChunk;
+                } else {
+                    chunks.push(currentChunk.trim());
+                }
+            }
+
+            return chunks.filter(chunk => chunk.length > 0);
+        };
+
         const getAudioContext = (rate) => {
             const targetRate = rate || audioSampleRate.value;
             if (audioContext && audioContext.sampleRate !== targetRate) {
@@ -256,7 +295,7 @@ createApp({
             audioSampleRate.value = 22050; // Or 24000? CosyVoice is usually 22050 or 24000. 
             // Let's rely on backend if possible, but HTTP streaming doesn't give metadata easily in raw body.
             // Assumption: 22050 for now or stick to 24000.
-            audioSampleRate.value = 24000; // Updated assumption
+            // audioSampleRate.value = 24000; // Updated assumption
 
             const float32 = int16ToFloat32(arrayBuffer);
             finalizeAudio([float32], 'pcm');
@@ -286,8 +325,8 @@ createApp({
             if (!res.ok) throw new Error((await res.json()).detail || (await res.json()).message || '流式请求失败');
 
             // The new backend doesn't seem to set 'X-Sample-Rate'.
-            audioSampleRate.value = 24000;
-            getAudioContext(24000);
+            audioSampleRate.value = 22050;
+            getAudioContext(22050);
 
             const reader = res.body.getReader();
             const buffers = [];
@@ -323,32 +362,55 @@ createApp({
         const handleWebSocket = () => {
             return new Promise((resolve, reject) => {
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                // New endpoint
                 ws = new WebSocket(`${protocol}//${window.location.host}/inference_zero_shot_bistream`);
                 const buffers = [];
                 nextStartTime = 0;
 
-                audioSampleRate.value = 24000; // Assumption
-                getAudioContext(24000);
+                audioSampleRate.value = 22050;
+                getAudioContext(22050);
 
                 ws.onopen = async () => {
-                    // Initial JSON
-                    const initData = {
-                        tts_text: form.value.text,
-                        prompt_text: form.value.prompt_text,
-                        tts_model_name: "default"
-                    };
+                    try {
+                        // 发送初始参数（包含 output_format）
+                        const initData = {
+                            prompt_text: form.value.prompt_text,
+                            tts_model_name: "default",
+                            output_format: form.value.output_format  // 新增输出格式参数
+                        };
 
-                    if (form.value.mode === 'sft') {
-                        initData.voice_id = form.value.voice_id;
-                    }
+                        if (form.value.mode === 'sft') {
+                            initData.voice_id = form.value.voice_id;
+                        }
 
-                    ws.send(JSON.stringify(initData));
+                        ws.send(JSON.stringify(initData));
 
-                    // If Zero Shot, send audio bytes next
-                    if (form.value.mode === 'zero_shot' && form.value.prompt_wav_file) {
-                        const arrayBuffer = await form.value.prompt_wav_file.arrayBuffer();
-                        ws.send(arrayBuffer);
+                        // 发送音频数据（Zero-shot 模式）
+                        if (form.value.mode === 'zero_shot' && form.value.prompt_wav_file) {
+                            const arrayBuffer = await form.value.prompt_wav_file.arrayBuffer();
+                            ws.send(arrayBuffer);
+                        }
+
+                        // 文本智能切分（按标点符号，每次最少 10 个字）
+                        const textChunks = splitTextByPunctuation(form.value.text, 10);
+                        console.log('文本切分为', textChunks.length, '段:', textChunks);
+
+                        // 逐段发送文本
+                        for (let i = 0; i < textChunks.length; i++) {
+                            const isLast = i === textChunks.length - 1;
+                            const payload = {
+                                tts_text: textChunks[i],
+                                finish: isLast  // 最后一段标记为 finish
+                            };
+                            ws.send(JSON.stringify(payload));
+
+                            // 添加小延迟避免过快发送
+                            if (!isLast) {
+                                await new Promise(r => setTimeout(r, 50));
+                            }
+                        }
+                    } catch (err) {
+                        reject(err);
+                        ws.close();
                     }
                 };
 
@@ -364,15 +426,30 @@ createApp({
                         } catch (e) { }
                     } else if (data instanceof Blob) {
                         const arrayBuffer = await data.arrayBuffer();
-                        const float32 = int16ToFloat32(arrayBuffer);
-                        playChunk(float32);
-                        buffers.push(float32);
+
+                        // 根据输出格式处理音频数据
+                        if (form.value.output_format === 'mp3' || form.value.output_format === 'wav') {
+                            // WAV 或 MP3：使用 decodeAudioData 解码
+                            await decodeAndPlayChunk(arrayBuffer);
+                            buffers.push(arrayBuffer);  // 保存原始数据用于下载
+                        } else {
+                            // PCM：直接转换为 float32 播放
+                            const float32 = int16ToFloat32(arrayBuffer);
+                            playChunk(float32);
+                            buffers.push(float32);
+                        }
                     }
                 };
-                ws.onerror = (e) => { error.value = "WebSocket 连接错误"; loading.value = false; reject(e); };
+
+                ws.onerror = (e) => {
+                    error.value = "WebSocket 连接错误";
+                    loading.value = false;
+                    reject(e);
+                };
+
                 ws.onclose = () => {
                     loading.value = false;
-                    finalizeAudio(buffers, 'pcm');
+                    finalizeAudio(buffers, form.value.output_format);
                     resolve();
                 };
             });
